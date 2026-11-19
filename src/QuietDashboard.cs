@@ -4,48 +4,180 @@ using System.ComponentModel;
 using System.Diagnostics;
 using System.Drawing;
 using System.Drawing.Drawing2D;
+using System.Drawing.Text;
+using System.Runtime.InteropServices;
 using System.Threading.Tasks;
 using System.Windows.Forms;
 
 namespace VictusQuiet
 {
+    // Shared look: colours, rounded shapes and icon font.
+    static class Ui
+    {
+        public static readonly Color Canvas = Color.FromArgb(11,16,24), Sidebar = Color.FromArgb(15,21,31), Surface = Color.FromArgb(21,29,41),
+            SurfaceHi = Color.FromArgb(29,39,54), Border = Color.FromArgb(37,49,66), Muted = Color.FromArgb(134,151,173), Faint = Color.FromArgb(88,104,126),
+            Ink = Color.FromArgb(236,241,248), Accent = Color.FromArgb(45,212,191), AccentDeep = Color.FromArgb(20,70,72), Violet = Color.FromArgb(167,139,250),
+            Warn = Color.FromArgb(251,191,36), Danger = Color.FromArgb(248,113,113);
+        public const string TextFont = "Microsoft JhengHei UI";
+        static string iconFamily, numberFamily;
+        static bool Installed(string name)
+        {
+            using (InstalledFontCollection fonts = new InstalledFontCollection())
+                foreach (FontFamily family in fonts.Families) if (family.Name == name) return true;
+            return false;
+        }
+        public static Font Icons(float size)
+        {
+            if (iconFamily == null) iconFamily = Installed("Segoe Fluent Icons") ? "Segoe Fluent Icons" : Installed("Segoe MDL2 Assets") ? "Segoe MDL2 Assets" : "";
+            return iconFamily.Length == 0 ? null : new Font(iconFamily, size);
+        }
+        public static Font Numbers(float size)
+        {
+            if (numberFamily == null) numberFamily = Installed("Segoe UI Variable Display Semib") ? "Segoe UI Variable Display Semib" : "Segoe UI Semibold";
+            return new Font(numberFamily, size);
+        }
+        public static GraphicsPath Round(RectangleF r, float radius)
+        {
+            GraphicsPath path = new GraphicsPath();
+            float d = Math.Min(radius * 2, Math.Min(r.Width, r.Height));
+            if (d <= 0.5f) { path.AddRectangle(r); return path; }
+            path.AddArc(r.X, r.Y, d, d, 180, 90); path.AddArc(r.Right - d, r.Y, d, d, 270, 90);
+            path.AddArc(r.Right - d, r.Bottom - d, d, d, 0, 90); path.AddArc(r.X, r.Bottom - d, d, d, 90, 90);
+            path.CloseFigure(); return path;
+        }
+        public static Color Outer(Control control) { return control.Parent != null ? control.Parent.BackColor : Canvas; }
+        public static Color Mix(Color a, Color b, float t)
+        { return Color.FromArgb((int)(a.R + (b.R - a.R) * t), (int)(a.G + (b.G - a.G) * t), (int)(a.B + (b.B - a.B) * t)); }
+    }
+
+    // Panel painted as a rounded card; BackColor is the card fill so child labels blend in.
+    class RoundPanel : Panel
+    {
+        public int Radius = 12;
+        public Color BorderColor = Ui.Border;
+        public RoundPanel()
+        {
+            SetStyle(ControlStyles.UserPaint | ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.ResizeRedraw, true);
+            BackColor = Ui.Surface;
+        }
+        protected override void OnPaintBackground(PaintEventArgs args)
+        {
+            Graphics g = args.Graphics; g.Clear(Ui.Outer(this)); g.SmoothingMode = SmoothingMode.AntiAlias;
+            using (GraphicsPath path = Ui.Round(new RectangleF(0.5f, 0.5f, Width - 1.5f, Height - 1.5f), Radius))
+            using (Brush fill = new SolidBrush(BackColor))
+            using (Pen border = new Pen(BorderColor))
+            { g.FillPath(fill, path); if (BorderColor.A > 0) g.DrawPath(border, path); }
+        }
+    }
+
+    enum ButtonKind { Primary, Secondary, Nav }
+
     sealed class DashboardButton : Button
     {
-        bool hovered, pressed;
-        public DashboardButton() { SetStyle(ControlStyles.UserPaint|ControlStyles.AllPaintingInWmPaint|ControlStyles.OptimizedDoubleBuffer,true); }
-        protected override void OnMouseEnter(EventArgs args){hovered=true;Invalidate();base.OnMouseEnter(args);}
-        protected override void OnMouseLeave(EventArgs args){hovered=pressed=false;Invalidate();base.OnMouseLeave(args);}
-        protected override void OnMouseDown(MouseEventArgs args){pressed=true;Invalidate();base.OnMouseDown(args);}
-        protected override void OnMouseUp(MouseEventArgs args){pressed=false;Invalidate();base.OnMouseUp(args);}
+        bool hovered, pressed, selected;
+        public ButtonKind Kind = ButtonKind.Secondary;
+        public string Glyph;
+        public bool Selected { get { return selected; } set { selected = value; Invalidate(); } }
+        public DashboardButton()
+        {
+            SetStyle(ControlStyles.UserPaint | ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.SupportsTransparentBackColor, true);
+            FlatStyle = FlatStyle.Flat; FlatAppearance.BorderSize = 0; Cursor = Cursors.Hand;
+        }
+        protected override void OnMouseEnter(EventArgs args) { hovered = true; Invalidate(); base.OnMouseEnter(args); }
+        protected override void OnMouseLeave(EventArgs args) { hovered = pressed = false; Invalidate(); base.OnMouseLeave(args); }
+        protected override void OnMouseDown(MouseEventArgs args) { pressed = true; Invalidate(); base.OnMouseDown(args); }
+        protected override void OnMouseUp(MouseEventArgs args) { pressed = false; Invalidate(); base.OnMouseUp(args); }
+        protected override void OnEnabledChanged(EventArgs args) { Invalidate(); base.OnEnabledChanged(args); }
         protected override void OnPaint(PaintEventArgs args)
         {
-            Color background=Enabled?BackColor:Color.FromArgb(23,33,46);
-            if(Enabled && hovered)background=ControlPaint.Light(background,pressed?.04f:.12f);
-            using(Brush fill=new SolidBrush(background))args.Graphics.FillRectangle(fill,ClientRectangle);
-            using(Pen border=new Pen(Enabled?FlatAppearance.BorderColor:Color.FromArgb(43,57,75)))args.Graphics.DrawRectangle(border,0,0,Math.Max(0,Width-1),Math.Max(0,Height-1));
-            Rectangle text=Rectangle.FromLTRB(Padding.Left+7,2,Width-Padding.Right-7,Height-2);
-            TextFormatFlags flags=TextFormatFlags.VerticalCenter|TextFormatFlags.SingleLine|TextFormatFlags.EndEllipsis;
-            flags|=TextAlign==ContentAlignment.MiddleLeft?TextFormatFlags.Left:TextFormatFlags.HorizontalCenter;
-            TextRenderer.DrawText(args.Graphics,Text,Font,text,Enabled?ForeColor:Color.FromArgb(117,138,160),flags);
-            if(Focused && ShowFocusCues)ControlPaint.DrawFocusRectangle(args.Graphics,new Rectangle(4,4,Math.Max(0,Width-9),Math.Max(0,Height-9)));
+            Graphics g = args.Graphics; Color outer = Ui.Outer(this); g.Clear(outer); g.SmoothingMode = SmoothingMode.AntiAlias;
+            Color fill, border, text;
+            if (Kind == ButtonKind.Primary)
+            {
+                fill = Enabled ? Ui.Accent : Color.FromArgb(25,46,52); border = fill;
+                text = Enabled ? Color.FromArgb(6,28,30) : Color.FromArgb(82,122,124);
+                if (Enabled && hovered) fill = pressed ? Color.FromArgb(32,184,166) : Color.FromArgb(94,234,212);
+            }
+            else if (Kind == ButtonKind.Secondary)
+            {
+                fill = Enabled ? Ui.SurfaceHi : Ui.Mix(Ui.Surface, outer, .4f); border = Enabled ? Color.FromArgb(52,68,90) : Ui.Border;
+                text = Enabled ? Ui.Ink : Ui.Faint;
+                if (Enabled && hovered) { fill = pressed ? Color.FromArgb(35,47,65) : Color.FromArgb(40,54,74); border = Color.FromArgb(70,90,116); }
+            }
+            else
+            {
+                fill = selected ? Color.FromArgb(21,48,55) : hovered ? Ui.SurfaceHi : outer; border = fill;
+                text = selected ? Ui.Accent : hovered ? Ui.Ink : Ui.Muted;
+            }
+            RectangleF box = new RectangleF(0.5f, 0.5f, Width - 1.5f, Height - 1.5f);
+            using (GraphicsPath path = Ui.Round(box, 9))
+            using (Brush brush = new SolidBrush(fill))
+            using (Pen pen = new Pen(border))
+            { g.FillPath(brush, path); g.DrawPath(pen, path); }
+            if (Kind == ButtonKind.Nav && selected)
+                using (GraphicsPath bar = Ui.Round(new RectangleF(0, Height * .28f, 3.5f, Height * .44f), 1.5f))
+                using (Brush accent = new SolidBrush(Ui.Accent)) g.FillPath(accent, bar);
+
+            int left = Kind == ButtonKind.Nav ? 16 : Padding.Left + 10;
+            Font icons = Glyph == null ? null : Ui.Icons(Font.Size * 1.05f);
+            Size label = TextRenderer.MeasureText(g, Text, Font, Size.Empty, TextFormatFlags.SingleLine);
+            int glyphWidth = icons == null ? 0 : (int)(Font.Size * 2.3f);
+            bool centered = TextAlign != ContentAlignment.MiddleLeft;
+            int start = centered ? Math.Max(left, (Width - label.Width - glyphWidth) / 2) : left;
+            if (icons != null)
+            {
+                TextRenderer.DrawText(g, Glyph, icons, new Rectangle(start, 0, glyphWidth, Height), text, fill, TextFormatFlags.VerticalCenter | TextFormatFlags.Left | TextFormatFlags.NoPadding);
+                icons.Dispose();
+            }
+            Rectangle area = Rectangle.FromLTRB(start + glyphWidth, 0, Width - 8, Height);
+            TextRenderer.DrawText(g, Text, Font, area, text, fill, TextFormatFlags.VerticalCenter | TextFormatFlags.SingleLine | TextFormatFlags.EndEllipsis | TextFormatFlags.Left);
+            if (Focused && ShowFocusCues)
+                using (Pen focus = new Pen(Color.FromArgb(150, Ui.Ink)) { DashStyle = DashStyle.Dot })
+                using (GraphicsPath path = Ui.Round(new RectangleF(3, 3, Width - 7, Height - 7), 7)) g.DrawPath(focus, path);
         }
     }
+
+    // Thin rounded bar; used for the quiet-session countdown and temperature headroom.
+    sealed class MeterBar : Control
+    {
+        double value = Double.NaN;
+        public double Maximum = 100;
+        public bool ThresholdColours;
+        public Color FillColor = Ui.Accent;
+        public int BarHeight = 6;
+        public double Value { get { return value; } set { this.value = value; Invalidate(); } }
+        public MeterBar() { SetStyle(ControlStyles.UserPaint | ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.ResizeRedraw, true); }
+        protected override void OnPaint(PaintEventArgs args)
+        {
+            Graphics g = args.Graphics; g.Clear(Ui.Outer(this)); g.SmoothingMode = SmoothingMode.AntiAlias;
+            RectangleF track = new RectangleF(0, (Height - BarHeight) / 2f, Width - 1, BarHeight);
+            using (GraphicsPath path = Ui.Round(track, BarHeight / 2f))
+            using (Brush brush = new SolidBrush(Color.FromArgb(36,48,65))) g.FillPath(brush, path);
+            if (Double.IsNaN(value) || value <= 0 || Maximum <= 0) return;
+            double ratio = Math.Min(1, value / Maximum);
+            Color colour = FillColor;
+            // Amber only within 3 units of the automatic-restore threshold, red at or above it.
+            if (ThresholdColours) colour = value >= Maximum ? Ui.Danger : value >= Maximum - 3 ? Ui.Warn : Ui.Accent;
+            RectangleF bar = new RectangleF(track.X, track.Y, Math.Max(BarHeight, track.Width * (float)ratio), track.Height);
+            using (GraphicsPath path = Ui.Round(bar, BarHeight / 2f))
+            using (Brush brush = new LinearGradientBrush(new RectangleF(bar.X - 1, bar.Y, bar.Width + 2, bar.Height), Ui.Mix(colour, Ui.Canvas, .35f), colour, LinearGradientMode.Horizontal))
+                g.FillPath(brush, path);
+        }
+    }
+
     sealed class SessionProgress : Control
     {
-        int value;
-        public int Value { get{return value;}set{this.value=Math.Max(0,Math.Min(300,value));Invalidate();} }
-        public SessionProgress(){DoubleBuffered=true;}
-        protected override void OnPaint(PaintEventArgs args)
-        {
-            args.Graphics.Clear(Color.FromArgb(38,53,70));
-            using(Brush fill=new SolidBrush(Color.FromArgb(74,215,196)))args.Graphics.FillRectangle(fill,0,0,Width*value/300f,Height);
-        }
+        readonly MeterBar bar = new MeterBar { Dock = DockStyle.Fill, Maximum = 300, BarHeight = 6 };
+        public int Value { get { return (int)(Double.IsNaN(bar.Value) ? 0 : bar.Value); } set { bar.Value = Math.Max(0, Math.Min(300, value)); } }
+        public SessionProgress() { Controls.Add(bar); }
+        protected override void OnParentBackColorChanged(EventArgs args) { bar.Invalidate(); base.OnParentBackColorChanged(args); }
     }
+
     sealed class FanHistory : Control
     {
         sealed class PointSample { public DateTime At; public int First, Second; }
         readonly List<PointSample> samples = new List<PointSample>();
-        public FanHistory() { DoubleBuffered = true; BackColor = Color.FromArgb(24,34,47); }
+        public FanHistory() { SetStyle(ControlStyles.UserPaint | ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.ResizeRedraw, true); }
         public void Add(DateTime at, int first, int second)
         {
             if (samples.Count > 0 && (at - samples[samples.Count-1].At).TotalSeconds < 0.8) return;
@@ -53,58 +185,98 @@ namespace VictusQuiet
             while (samples.Count > 0 && (at - samples[0].At).TotalSeconds > 122) samples.RemoveAt(0);
             Invalidate();
         }
+        static void Legend(Graphics g, Font font, string text, Color colour, float right, float y, out float left)
+        {
+            SizeF size = g.MeasureString(text, font);
+            left = right - size.Width;
+            using (Brush ink = new SolidBrush(Ui.Muted)) g.DrawString(text, font, ink, left, y);
+            using (Brush dot = new SolidBrush(colour)) g.FillEllipse(dot, left - 13, y + size.Height / 2 - 4, 8, 8);
+            left -= 13;
+        }
         protected override void OnPaint(PaintEventArgs args)
         {
-            base.OnPaint(args);
-            Graphics g = args.Graphics; g.SmoothingMode = SmoothingMode.AntiAlias;
-            Rectangle plot = new Rectangle(48, 47, Math.Max(10,Width-68), Math.Max(20,Height-77));
+            Graphics g = args.Graphics; g.Clear(Ui.Outer(this)); g.SmoothingMode = SmoothingMode.AntiAlias; g.TextRenderingHint = TextRenderingHint.ClearTypeGridFit;
+            RectangleF card = new RectangleF(0.5f, 12.5f, Width - 1.5f, Height - 26.5f);
+            using (GraphicsPath path = Ui.Round(card, 12))
+            using (Brush fill = new SolidBrush(Ui.Surface))
+            using (Pen border = new Pen(Ui.Border)) { g.FillPath(fill, path); g.DrawPath(border, path); }
+
+            Rectangle plot = Rectangle.FromLTRB(64, (int)card.Top + 58, Math.Max(80, Width - 24), Math.Max((int)card.Top + 90, (int)card.Bottom - 36));
             int ceiling = 4000;
-            foreach (PointSample sample in samples) ceiling = Math.Max(ceiling, ((Math.Max(sample.First,sample.Second)+999)/1000)*1000);
-            using (Pen grid = new Pen(Color.FromArgb(48,62,78)))
-            using (Brush text = new SolidBrush(Color.FromArgb(144,165,187)))
-            using (Font small = new Font("Microsoft JhengHei UI", 9))
+            foreach (PointSample sample in samples) ceiling = Math.Max(ceiling, ((Math.Max(sample.First, sample.Second) + 999) / 1000) * 1000);
+            using (Font heading = new Font(Ui.TextFont, 10.5f, FontStyle.Bold))
+            using (Font small = new Font(Ui.TextFont, 9))
+            using (Brush ink = new SolidBrush(Ui.Ink))
+            using (Brush muted = new SolidBrush(Ui.Muted))
+            using (Brush faint = new SolidBrush(Ui.Faint))
+            using (Pen grid = new Pen(Color.FromArgb(34,45,61)) { DashStyle = DashStyle.Dash, DashPattern = new float[] { 3, 4 } })
             {
-                g.DrawString("轉速變化  ·  最近 2 分鐘", small, text, 16, 14);
-                g.DrawString("風扇 1", small, Brushes.Turquoise, Math.Max(220, Width-180), 14);
-                g.DrawString("風扇 2", small, Brushes.MediumPurple, Math.Max(292, Width-93), 14);
-                for (int i=0; i<=4; i++)
+                g.DrawString("轉速變化", heading, ink, 20, card.Top + 18);
+                g.DrawString("最近 2 分鐘", small, faint, 20 + g.MeasureString("轉速變化", heading).Width + 4, card.Top + 20);
+                float left;
+                Legend(g, small, "風扇 2", Ui.Violet, Width - 22, card.Top + 20, out left);
+                Legend(g, small, "風扇 1", Ui.Accent, left - 18, card.Top + 20, out left);
+                for (int i = 0; i <= 4; i++)
                 {
                     float y = plot.Top + plot.Height * i / 4f;
                     g.DrawLine(grid, plot.Left, y, plot.Right, y);
-                    g.DrawString((ceiling*(4-i)/4/1000.0).ToString("0.#")+"k", small, text, 9, y-8);
+                    string mark = (ceiling * (4 - i) / 4 / 1000.0).ToString("0.#") + "k";
+                    SizeF size = g.MeasureString(mark, small);
+                    g.DrawString(mark, small, faint, plot.Left - 12 - size.Width, y - size.Height / 2);
                 }
-                g.DrawString("2 分鐘前", small, text, plot.Left, plot.Bottom+7);
-                g.DrawString("現在", small, text, plot.Right-34, plot.Bottom+7);
+                g.DrawString("2 分鐘前", small, faint, plot.Left - 4, plot.Bottom + 8);
+                SizeF now = g.MeasureString("現在", small);
+                g.DrawString("現在", small, faint, plot.Right - now.Width + 4, plot.Bottom + 8);
                 if (samples.Count < 2)
-                    g.DrawString("等待足夠的即時讀值…", small, text, plot.Left+20, plot.Top+plot.Height/2);
+                {
+                    string waiting = "等待足夠的即時讀值…";
+                    SizeF size = g.MeasureString(waiting, small);
+                    g.DrawString(waiting, small, muted, plot.Left + (plot.Width - size.Width) / 2, plot.Top + (plot.Height - size.Height) / 2);
+                }
             }
             if (samples.Count < 2) return;
-            DateTime now = samples[samples.Count-1].At;
+            DateTime latest = samples[samples.Count-1].At;
             PointF[] first = new PointF[samples.Count], second = new PointF[samples.Count];
-            for (int i=0; i<samples.Count; i++)
+            for (int i = 0; i < samples.Count; i++)
             {
-                float x = plot.Right - (float)(now-samples[i].At).TotalSeconds/120f*plot.Width;
-                first[i] = new PointF(Math.Max(plot.Left,x), plot.Bottom-samples[i].First/(float)ceiling*plot.Height);
-                second[i] = new PointF(Math.Max(plot.Left,x), plot.Bottom-samples[i].Second/(float)ceiling*plot.Height);
+                float x = Math.Max(plot.Left, plot.Right - (float)(latest - samples[i].At).TotalSeconds / 120f * plot.Width);
+                first[i] = new PointF(x, plot.Bottom - samples[i].First / (float)ceiling * plot.Height);
+                second[i] = new PointF(x, plot.Bottom - samples[i].Second / (float)ceiling * plot.Height);
             }
-            using (Pen one = new Pen(Color.FromArgb(74,215,196),2.2f))
-            using (Pen two = new Pen(Color.FromArgb(169,143,247),2.2f))
-            { g.DrawLines(one,first); g.DrawLines(two,second); }
+            Series(g, second, Ui.Violet, plot);
+            Series(g, first, Ui.Accent, plot);
+        }
+        static void Series(Graphics g, PointF[] points, Color colour, Rectangle plot)
+        {
+            using (GraphicsPath area = new GraphicsPath())
+            {
+                area.AddLines(points);
+                area.AddLine(points[points.Length-1].X, points[points.Length-1].Y, points[points.Length-1].X, plot.Bottom);
+                area.AddLine(points[points.Length-1].X, plot.Bottom, points[0].X, plot.Bottom);
+                area.CloseFigure();
+                using (Brush shade = new LinearGradientBrush(new RectangleF(plot.Left, plot.Top - 1, plot.Width, plot.Height + 2), Color.FromArgb(52, colour), Color.FromArgb(0, colour), LinearGradientMode.Vertical))
+                    g.FillPath(shade, area);
+            }
+            using (Pen line = new Pen(colour, 2.2f) { LineJoin = LineJoin.Round, StartCap = LineCap.Round, EndCap = LineCap.Round }) g.DrawLines(line, points);
+            PointF end = points[points.Length-1];
+            using (Brush glow = new SolidBrush(Color.FromArgb(60, colour))) g.FillEllipse(glow, end.X - 7, end.Y - 7, 14, 14);
+            using (Brush dot = new SolidBrush(colour)) g.FillEllipse(dot, end.X - 3.5f, end.Y - 3.5f, 7, 7);
         }
     }
 
     sealed class QuietWindow : Form
     {
-        static readonly Color Canvas = Color.FromArgb(13,20,30), Surface = Color.FromArgb(24,34,47), Muted = Color.FromArgb(150,170,192), Ink = Color.FromArgb(232,239,248), Accent = Color.FromArgb(74,215,196);
+        static readonly Color Canvas = Ui.Canvas, Surface = Ui.Surface, Muted = Ui.Muted, Ink = Ui.Ink, Accent = Ui.Accent;
         readonly bool preview;
         readonly string previewScene;
         readonly Panel[] pages = new Panel[3];
-        readonly Button[] navigation = new Button[3];
+        readonly DashboardButton[] navigation = new DashboardButton[3];
         readonly List<Button> quietButtons = new List<Button>(), autoButtons = new List<Button>();
         readonly List<string> events = new List<string>();
         readonly Label title, subtitle, connection, fan1, fan2, zone, gpu, load, currentMode, countdown, controlMode, controlTimer, status, refreshed;
         readonly Button admin;
         readonly SessionProgress sessionProgress;
+        readonly MeterBar zoneBar, gpuBar;
         readonly FanHistory history;
         readonly TextBox eventLog;
         readonly System.Windows.Forms.Timer timer;
@@ -114,85 +286,141 @@ namespace VictusQuiet
         bool busy, allowClose, closePending;
         string error = "", loggedStatus = "";
 
+        [DllImport("dwmapi.dll")] static extern int DwmSetWindowAttribute(IntPtr window, int attribute, ref int value, int size);
+        [DllImport("uxtheme.dll", CharSet = CharSet.Unicode)] static extern int SetWindowTheme(IntPtr window, string app, string list);
+        protected override void OnHandleCreated(EventArgs args)
+        {
+            base.OnHandleCreated(args);
+            try
+            {
+                int on = 1; DwmSetWindowAttribute(Handle, 20, ref on, 4);           // dark title bar
+                int caption = Ui.Sidebar.R | (Ui.Sidebar.G << 8) | (Ui.Sidebar.B << 16);
+                DwmSetWindowAttribute(Handle, 35, ref caption, 4);                    // Windows 11 caption colour
+            }
+            catch (Exception) { }
+        }
+
         public QuietWindow(bool preview, string scene = "quiet")
         {
             this.preview = preview; previewScene = scene;
-            Text = "Victus 風扇控制面板"; Icon = System.Drawing.Icon.ExtractAssociatedIcon(Application.ExecutablePath); ClientSize = new Size(1080,690); MinimumSize = new Size(940,670);
+            Text = "Victus 風扇控制面板"; Icon = System.Drawing.Icon.ExtractAssociatedIcon(Application.ExecutablePath); ClientSize = new Size(1080,700); MinimumSize = new Size(960,690);
             StartPosition = FormStartPosition.CenterScreen; AutoScaleMode = AutoScaleMode.Dpi;
-            Font = new Font("Microsoft JhengHei UI",10); BackColor = Canvas; ForeColor = Ink;
-            Panel side = new Panel { Dock = DockStyle.Left, Width = 178, BackColor = Color.FromArgb(18,28,41) };
-            side.Controls.Add(LabelAt("VICTUS",22,28,145,36,21,Ink));
-            side.Controls.Add(LabelAt("風扇控制台",24,69,140,25,10,Muted));
-            string[] names = { "01  即時總覽", "02  風扇控制", "03  保護與紀錄" };
+            Font = new Font(Ui.TextFont,10); BackColor = Canvas; ForeColor = Ink;
+
+            // Sidebar: logo, navigation and device identity.
+            Panel side = new Panel { Dock = DockStyle.Left, Width = 196, BackColor = Ui.Sidebar };
+            side.Paint += delegate(object sender, PaintEventArgs args)
+            {
+                using (Pen line = new Pen(Color.FromArgb(28,37,51))) args.Graphics.DrawLine(line, side.Width - 1, 0, side.Width - 1, side.Height);
+                args.Graphics.SmoothingMode = SmoothingMode.AntiAlias; args.Graphics.InterpolationMode = InterpolationMode.HighQualityBicubic;
+                using (GraphicsPath badge = Ui.Round(new RectangleF(20, 26, 40, 40), 11))
+                using (Brush fill = new SolidBrush(Ui.AccentDeep)) args.Graphics.FillPath(fill, badge);
+                if (Icon != null) using (Bitmap picture = Icon.ToBitmap()) args.Graphics.DrawImage(picture, new Rectangle(26, 32, 28, 28));
+            };
+            Label brand = LabelAt("VICTUS",70,24,120,28,15,Ink); brand.Font = new Font("Bahnschrift SemiBold", 16); side.Controls.Add(brand);
+            side.Controls.Add(LabelAt("風扇控制台",71,50,120,20,9,Muted));
+            side.Controls.Add(LabelAt("功能",22,104,120,20,8,Ui.Faint));
+            string[] names = { "即時總覽", "風扇控制", "保護與紀錄" };
+            string[] glyphs = { "", "", "" };
             for (int i=0; i<3; i++)
             {
                 int page = i;
-                Button button = FlatButton(names[i], false); button.Location = new Point(12,135+i*57); button.Size = new Size(154,46);
-                button.TextAlign = ContentAlignment.MiddleLeft; button.Padding = new Padding(10,0,0,0);
+                DashboardButton button = new DashboardButton { Kind = ButtonKind.Nav, Text = names[i], Glyph = glyphs[i], Font = new Font(Ui.TextFont, 10.5f), TextAlign = ContentAlignment.MiddleLeft, Location = new Point(12, 128 + i*52), Size = new Size(172, 44) };
                 button.Click += delegate { ShowPage(page); }; navigation[i]=button; side.Controls.Add(button);
             }
-            Label identity = LabelAt("本機控制\r\nHP 88F8 · BIOS F.25\r\n每 2 秒更新讀值",22,0,150,76,9,Muted);
-            identity.Dock = DockStyle.Bottom; identity.Padding=new Padding(20,0,0,0); side.Controls.Add(identity);
+            RoundPanel identity = new RoundPanel { Dock = DockStyle.Bottom, Height = 92, BackColor = Color.FromArgb(19,27,39), BorderColor = Color.FromArgb(30,40,55), Padding = new Padding(14,10,10,8) };
+            identity.Controls.Add(new Label { Text = "HP 88F8 · BIOS F.25\r\n每 2 秒更新讀值", Dock = DockStyle.Fill, ForeColor = Muted, Font = new Font(Ui.TextFont, 8.5f) });
+            identity.Controls.Add(new Label { Text = "本機控制", Dock = DockStyle.Top, Height = 24, ForeColor = Ink, Font = new Font(Ui.TextFont, 9, FontStyle.Bold) });
+            Panel identityHost = new Panel { Dock = DockStyle.Bottom, Height = 108, Padding = new Padding(12,0,12,16) };
+            identityHost.Controls.Add(identity); identity.Dock = DockStyle.Fill; side.Controls.Add(identityHost);
             Controls.Add(side);
-            Panel main = new Panel { Dock = DockStyle.Fill, Padding = new Padding(24,20,24,14) };
+
+            Panel main = new Panel { Dock = DockStyle.Fill, Padding = new Padding(28,22,28,16) };
             Controls.Add(main); main.BringToFront();
-            Panel header = new Panel { Dock = DockStyle.Top, Height = 82 };
-            title = LabelAt("即時總覽",0,0,500,38,23,Ink);
-            subtitle = LabelAt("查看即時狀態，快速切換已驗證的安靜模式。",2,47,530,26,10,Muted);
+            Panel header = new Panel { Dock = DockStyle.Top, Height = 84 };
+            title = LabelAt("即時總覽",0,0,520,40,21,Ink); title.Font = new Font(Ui.TextFont, 21, FontStyle.Bold);
+            subtitle = LabelAt("查看即時狀態，快速切換已驗證的安靜模式。",2,46,560,26,10,Muted);
             connection = LabelAt("尚未取得控制權限",0,0,240,24,9,Muted); connection.TextAlign = ContentAlignment.MiddleRight;
-            admin = FlatButton("取得管理員權限",false); admin.Size = new Size(180,34);
+            admin = new DashboardButton { Kind = ButtonKind.Primary, Text = "取得管理員權限", Glyph = "", Font = new Font(Ui.TextFont, 10), Size = new Size(190,38) };
             header.Controls.AddRange(new Control[] { title,subtitle,connection,admin });
-            header.Resize += delegate { connection.Location = new Point(header.Width-244,2); admin.Location = new Point(header.Width-180,34); };
-            Panel footer = new Panel { Dock = DockStyle.Bottom, Height = 54 };
-            status = LabelAt("開啟面板不會直接改變風扇。",0,7,800,44,9,Muted); status.Dock = DockStyle.Fill; footer.Controls.Add(status);
+            header.Resize += delegate { connection.Location = new Point(header.Width-244,4); admin.Location = new Point(header.Width-190,34); };
+
+            Panel footer = new Panel { Dock = DockStyle.Bottom, Height = 64, Padding = new Padding(0,10,0,0) };
+            RoundPanel statusCard = new RoundPanel { Dock = DockStyle.Fill, BackColor = Color.FromArgb(17,24,35), BorderColor = Color.FromArgb(30,40,55), Padding = new Padding(44,6,14,4) };
+            statusCard.Paint += delegate(object sender, PaintEventArgs args)
+            {
+                Font icons = Ui.Icons(12); if (icons == null) return;
+                TextRenderer.DrawText(args.Graphics, "", icons, new Rectangle(14,0,24,statusCard.Height), Muted, TextFormatFlags.VerticalCenter|TextFormatFlags.Left);
+                icons.Dispose();
+            };
+            status = new Label { Text = "開啟面板不會直接改變風扇。", Dock = DockStyle.Fill, ForeColor = Muted, Font = new Font(Ui.TextFont, 9), TextAlign = ContentAlignment.MiddleLeft };
+            statusCard.Controls.Add(status); footer.Controls.Add(statusCard);
             Panel host = new Panel { Dock = DockStyle.Fill };
             main.Controls.Add(host); main.Controls.Add(footer); main.Controls.Add(header);
             for(int i=0;i<3;i++) { pages[i]=new Panel { Dock=DockStyle.Fill }; host.Controls.Add(pages[i]); }
 
             // Overview: live metric cards, history and quick controls.
-            TableLayoutPanel cards = Grid(4); cards.Dock=DockStyle.Top; cards.Height=118;
-            fan1=Metric(cards,0,"風扇 1","RPM · 估計",Accent);
-            fan2=Metric(cards,1,"風扇 2","RPM · 估計",Color.FromArgb(169,143,247));
-            zone=Metric(cards,2,"ACPI 熱區","°C · 非核心溫度",Ink);
-            gpu=Metric(cards,3,"GPU 溫度","°C · NVIDIA",Ink);
-            Panel summary = new Panel { Dock=DockStyle.Top, Height=55 };
-            load=LabelAt("CPU 負載 —　 GPU 負載 —",2,18,470,28,10,Muted);
-            refreshed=LabelAt("等待連線",0,18,200,28,9,Muted); refreshed.TextAlign=ContentAlignment.MiddleRight;
-            summary.Controls.AddRange(new Control[]{load,refreshed}); summary.Resize+=delegate{refreshed.Location=new Point(summary.Width-200,18);};
-            Panel actions = new Panel { Dock=DockStyle.Bottom, Height=128, Padding=new Padding(0,12,0,0) };
-            currentMode=LabelAt("目前：原有管理方式",2,12,480,28,11,Ink);
-            countdown=LabelAt("每次低速最多 5 分鐘",0,12,260,28,9,Muted); countdown.TextAlign=ContentAlignment.MiddleRight;
-            actions.Controls.AddRange(new Control[]{currentMode,countdown});
-            TableLayoutPanel quick = Grid(2); quick.Dock=DockStyle.Bottom; quick.Height=67;
-            quick.Controls.Add(QuietButton("啟用安靜模式 · 約 1800 RPM"),0,0);
-            quick.Controls.Add(AutoButton(),1,0); actions.Controls.Add(quick);
-            actions.Resize+=delegate{countdown.Location=new Point(actions.Width-260,12);};
-            history=new FanHistory { Dock=DockStyle.Fill, Margin=new Padding(0,0,0,4) };
+            TableLayoutPanel cards = Grid(4); cards.Dock=DockStyle.Top; cards.Height=126;
+            fan1=Metric(cards,0,"風扇 1","RPM · 估計",Accent,null,null);
+            fan2=Metric(cards,1,"風扇 2","RPM · 估計",Ui.Violet,null,null);
+            zoneBar=new MeterBar { Maximum=60, ThresholdColours=true };
+            gpuBar=new MeterBar { Maximum=55, ThresholdColours=true };
+            zone=Metric(cards,2,"ACPI 熱區","°C · 非核心溫度",Ink,zoneBar,"60°C 恢復");
+            gpu=Metric(cards,3,"GPU 溫度","°C · NVIDIA",Ink,gpuBar,"55°C 恢復");
+            Panel summary = new Panel { Dock=DockStyle.Top, Height=40 };
+            load=LabelAt("CPU 負載 —　 GPU 負載 —",2,14,470,24,10,Muted);
+            refreshed=LabelAt("等待連線",0,14,200,24,9,Ui.Faint); refreshed.TextAlign=ContentAlignment.MiddleRight;
+            summary.Controls.AddRange(new Control[]{load,refreshed}); summary.Resize+=delegate{refreshed.Location=new Point(summary.Width-200,14);};
+            RoundPanel actions = new RoundPanel { Dock=DockStyle.Bottom, Height=114, Padding=new Padding(18,12,18,16) };
+            Panel actionRow = new Panel { Dock=DockStyle.Top, Height=34 };
+            currentMode=LabelAt("目前：原有管理方式",0,2,480,28,11,Ink); currentMode.Font=new Font(Ui.TextFont,11,FontStyle.Bold);
+            countdown=LabelAt("每次低速最多 5 分鐘",0,4,260,26,9,Muted); countdown.TextAlign=ContentAlignment.MiddleRight;
+            actionRow.Controls.AddRange(new Control[]{currentMode,countdown});
+            actionRow.Resize+=delegate{countdown.Location=new Point(actionRow.Width-260,4);};
+            TableLayoutPanel quick = Grid(2); quick.Dock=DockStyle.Fill;
+            Button quickQuiet=QuietButton("啟用安靜模式 · 約 1800 RPM"); quickQuiet.Margin=new Padding(0,0,7,0); quick.Controls.Add(quickQuiet,0,0);
+            Button quickAuto=AutoButton(); quickAuto.Margin=new Padding(7,0,0,0); quick.Controls.Add(quickAuto,1,0);
+            actions.Controls.Add(quick); actions.Controls.Add(actionRow);
+            history=new FanHistory { Dock=DockStyle.Fill };
             pages[0].Controls.Add(history); pages[0].Controls.Add(actions); pages[0].Controls.Add(summary); pages[0].Controls.Add(cards);
 
             // Controls: two explicit modes, each backed by the existing controller.
-            Panel modeHead=new Panel { Dock=DockStyle.Top,Height=104,BackColor=Surface };
-            controlMode=LabelAt("原有管理方式",20,17,500,36,20,Ink);
-            controlTimer=LabelAt("尚未啟用低速",22,64,680,26,10,Muted);
+            RoundPanel modeHead=new RoundPanel { Dock=DockStyle.Top,Height=118,Padding=new Padding(22,0,22,18) };
+            modeHead.Controls.Add(LabelAt("目前模式",22,16,300,20,9,Ui.Faint));
+            controlMode=LabelAt("原有管理方式",20,36,560,40,19,Ink); controlMode.Font=new Font(Ui.TextFont,19,FontStyle.Bold);
+            controlTimer=LabelAt("尚未啟用低速",0,46,360,24,10,Muted); controlTimer.TextAlign=ContentAlignment.MiddleRight;
             modeHead.Controls.AddRange(new Control[]{controlMode,controlTimer});
-            sessionProgress=new SessionProgress { Dock=DockStyle.Bottom,Height=5,Value=0 }; modeHead.Controls.Add(sessionProgress);
-            TableLayoutPanel modeTiles=Grid(2); modeTiles.Dock=DockStyle.Top; modeTiles.Height=232; modeTiles.Padding=new Padding(0,16,0,0);
-            modeTiles.Controls.Add(ModeTile("安靜模式","約 1800 RPM","兩個風扇一起降速。每次最多五分鐘，適合低負載時使用。",QuietButton("啟用低速")),0,0);
-            modeTiles.Controls.Add(ModeTile("原廠自動管理","依溫度調整","解除本工具的低速設定，交回 BIOS 管理散熱。",AutoButton()),1,0);
-            Label controlNote=new Label { Dock=DockStyle.Fill,ForeColor=Muted,Padding=new Padding(3,20,5,0),Text="啟用條件\r\nACPI 熱區低於 60°C、GPU 低於 55°C，\r\nCPU 負載不超過 25%、GPU 負載不超過 30%。\r\n\r\n溫度或負載偏高時，面板會說明原因，保留原有散熱方式。",AutoSize=false };
-            pages[1].Controls.Add(controlNote); pages[1].Controls.Add(modeTiles); pages[1].Controls.Add(modeHead);
+            modeHead.Resize+=delegate{controlTimer.Location=new Point(modeHead.Width-382,46);};
+            sessionProgress=new SessionProgress { Dock=DockStyle.Bottom,Height=12,Value=0 }; modeHead.Controls.Add(sessionProgress);
+            TableLayoutPanel modeTiles=Grid(2); modeTiles.Dock=DockStyle.Top; modeTiles.Height=236; modeTiles.Padding=new Padding(0,14,0,0);
+            Panel quietTile=ModeTile("","安靜模式","約 1800 RPM","兩個風扇一起降速。每次最多五分鐘，適合低負載時使用。",Accent,QuietButton("啟用低速"));
+            quietTile.Margin=new Padding(0,0,7,0); modeTiles.Controls.Add(quietTile,0,0);
+            Panel autoTile=ModeTile("","原廠自動管理","依溫度調整","解除本工具的低速設定，交回 BIOS 管理散熱。",Ink,AutoButton());
+            autoTile.Margin=new Padding(7,0,0,0); modeTiles.Controls.Add(autoTile,1,0);
+            Panel conditionHost=new Panel { Dock=DockStyle.Fill,Padding=new Padding(0,14,0,0) };
+            RoundPanel conditions=new RoundPanel { Dock=DockStyle.Fill,Padding=new Padding(20,14,20,14) };
+            conditions.Controls.Add(new Label { Dock=DockStyle.Fill,ForeColor=Muted,Text="溫度或負載偏高時，面板會說明原因，保留原有散熱方式。",Padding=new Padding(0,12,0,0) });
+            TableLayoutPanel chips=Grid(4); chips.Dock=DockStyle.Top; chips.Height=62;
+            string[,] rules={{"ACPI 熱區","低於 60°C"},{"GPU 溫度","低於 55°C"},{"CPU 負載","不超過 25%"},{"GPU 負載","不超過 30%"}};
+            for(int i=0;i<4;i++) chips.Controls.Add(Chip(rules[i,0],rules[i,1],i),i,0);
+            conditions.Controls.Add(chips);
+            conditions.Controls.Add(new Label { Text="啟用條件",Dock=DockStyle.Top,Height=30,ForeColor=Ink,Font=new Font(Ui.TextFont,11,FontStyle.Bold) });
+            conditionHost.Controls.Add(conditions);
+            pages[1].Controls.Add(conditionHost); pages[1].Controls.Add(modeTiles); pages[1].Controls.Add(modeHead);
 
             // Protection details and a session-only activity log.
             TableLayoutPanel protection=Grid(2); protection.Dock=DockStyle.Fill;
-            Panel rules=new Panel { Dock=DockStyle.Fill,BackColor=Surface,Margin=new Padding(0,0,8,0),Padding=new Padding(18) };
-            Label rulesTitle=new Label { Text="自動恢復條件",Dock=DockStyle.Top,Height=44,Font=new Font(Font.FontFamily,15),ForeColor=Ink };
-            Label ruleText=new Label { Dock=DockStyle.Fill,ForeColor=Muted,Text="• ACPI 熱區達 60°C\r\n\r\n• GPU 溫度達 55°C\r\n\r\n• 運算負載升高\r\n\r\n• 溫度或風扇讀值失效\r\n\r\n• 本輪低速滿五分鐘\r\n\r\n• 正常關閉程式\r\n\r\n另有獨立備援程序，在主程式中斷時嘗試恢復散熱。" };
-            rules.Controls.Add(ruleText); rules.Controls.Add(rulesTitle);
-            Panel logs=new Panel { Dock=DockStyle.Fill,BackColor=Surface,Margin=new Padding(8,0,0,0),Padding=new Padding(16) };
-            logs.Controls.Add(new Label { Text="本次操作紀錄",Dock=DockStyle.Top,Height=44,Font=new Font(Font.FontFamily,15),ForeColor=Ink });
-            eventLog=new TextBox { Dock=DockStyle.Fill,Multiline=true,ReadOnly=true,ScrollBars=ScrollBars.Vertical,BorderStyle=BorderStyle.None,BackColor=Surface,ForeColor=Muted,Font=new Font("Microsoft JhengHei UI",9) };
-            logs.Controls.Add(eventLog); eventLog.BringToFront();
-            protection.Controls.Add(rules,0,0); protection.Controls.Add(logs,1,0); pages[2].Controls.Add(protection);
+            RoundPanel rulesCard=new RoundPanel { Dock=DockStyle.Fill,Margin=new Padding(0,0,7,0),Padding=new Padding(22,18,20,18) };
+            string[] restore={"ACPI 熱區達 60°C","GPU 溫度達 55°C","運算負載升高","溫度或風扇讀值失效","本輪低速滿五分鐘","正常關閉程式"};
+            Label backup=new Label { Dock=DockStyle.Bottom,Height=58,ForeColor=Accent,Text="另有獨立備援程序，在主程式中斷時嘗試恢復散熱。",TextAlign=ContentAlignment.MiddleLeft,Font=new Font(Ui.TextFont,9.5f) };
+            backup.Dock=DockStyle.Top; rulesCard.Controls.Add(backup);
+            for(int i=restore.Length-1;i>=0;i--) rulesCard.Controls.Add(RuleRow(restore[i]));
+            rulesCard.Controls.Add(CardTitle("","自動恢復條件"));
+            RoundPanel logs=new RoundPanel { Dock=DockStyle.Fill,Margin=new Padding(7,0,0,0),Padding=new Padding(22,18,14,14) };
+            eventLog=new TextBox { Dock=DockStyle.Fill,Multiline=true,ReadOnly=true,ScrollBars=ScrollBars.Vertical,BorderStyle=BorderStyle.None,BackColor=Surface,ForeColor=Muted,Font=new Font(Ui.TextFont,9.5f) };
+            eventLog.HandleCreated+=delegate{try{SetWindowTheme(eventLog.Handle,"DarkMode_Explorer",null);}catch(Exception){}};
+            logs.Controls.Add(eventLog); logs.Controls.Add(CardTitle("","本次操作紀錄"));
+            protection.Controls.Add(rulesCard,0,0); protection.Controls.Add(logs,1,0); pages[2].Controls.Add(protection);
 
             admin.Click+=delegate { if(preview)return; try { ProcessStartInfo start=new ProcessStartInfo(Application.ExecutablePath); start.UseShellExecute=true; start.Verb="runas"; Process.Start(start); allowClose=true; Close(); } catch(Win32Exception failure) { error=failure.NativeErrorCode==1223?"已取消提升權限，未改變風扇。":failure.Message; UpdateView(false); } };
             timer=new System.Windows.Forms.Timer { Interval=2000 };
@@ -220,57 +448,89 @@ namespace VictusQuiet
             ShowPage(0); UpdateView(false);
         }
 
-        Label LabelAt(string text,int x,int y,int width,int height,int size,Color color)
-        { return new Label { Text=text,Location=new Point(x,y),Size=new Size(width,height),Font=new Font(Font.FontFamily,size),ForeColor=color }; }
+        Label LabelAt(string text,int x,int y,int width,int height,float size,Color color)
+        { return new Label { Text=text,Location=new Point(x,y),Size=new Size(width,height),Font=new Font(Ui.TextFont,size),ForeColor=color }; }
         TableLayoutPanel Grid(int columns)
         {
             TableLayoutPanel table=new TableLayoutPanel{ColumnCount=columns,RowCount=1,Margin=Padding.Empty,Padding=Padding.Empty};
             for(int i=0;i<columns;i++)table.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100f/columns));
             table.RowStyles.Add(new RowStyle(SizeType.Percent,100));return table;
         }
-        Label Metric(TableLayoutPanel parent,int column,string name,string unit,Color color)
+        Label Metric(TableLayoutPanel parent,int column,string name,string unit,Color color,MeterBar bar,string limit)
         {
-            Panel card=new Panel{Dock=DockStyle.Fill,BackColor=Surface,Margin=new Padding(column==0?0:6,0,column==3?0:6,0),Padding=new Padding(14,12,8,9)};
-            card.Controls.Add(new Label{Text=name,Dock=DockStyle.Top,Height=26,ForeColor=Muted});
-            Label value=new Label{Text="—",Dock=DockStyle.Fill,Font=new Font(Font.FontFamily,25),ForeColor=color,TextAlign=ContentAlignment.MiddleLeft};
+            RoundPanel card=new RoundPanel{Dock=DockStyle.Fill,Margin=new Padding(column==0?0:6,0,column==3?0:6,0),Padding=new Padding(16,13,16,11)};
+            Panel head=new Panel{Dock=DockStyle.Top,Height=22};
+            head.Controls.Add(new Label{Text=name,Dock=DockStyle.Fill,ForeColor=Muted,Font=new Font(Ui.TextFont,9.5f)});
+            if(limit!=null)head.Controls.Add(new Label{Text=limit,Dock=DockStyle.Right,Width=80,ForeColor=Ui.Faint,Font=new Font(Ui.TextFont,8.5f),TextAlign=ContentAlignment.TopRight});
+            card.Controls.Add(head);
+            Label value=new Label{Text="—",Dock=DockStyle.Fill,Font=Ui.Numbers(23),ForeColor=color,TextAlign=ContentAlignment.MiddleLeft};
             card.Controls.Add(value);value.BringToFront();
-            card.Controls.Add(new Label{Text=unit,Dock=DockStyle.Bottom,Height=21,Font=new Font(Font.FontFamily,8),ForeColor=Muted});
+            if(bar!=null){bar.Dock=DockStyle.Bottom;bar.Height=12;card.Controls.Add(bar);}
+            else card.Controls.Add(new Panel{Dock=DockStyle.Bottom,Height=12});
+            card.Controls.Add(new Label{Text=unit,Dock=DockStyle.Bottom,Height=19,Font=new Font(Ui.TextFont,8.5f),ForeColor=Ui.Faint});
             parent.Controls.Add(card,column,0);return value;
         }
-        Button FlatButton(string text,bool primary)
+        Control Chip(string name,string value,int column)
         {
-            Button button=new DashboardButton{Text=text,FlatStyle=FlatStyle.Flat,BackColor=primary?Color.FromArgb(32,91,92):Color.FromArgb(28,44,62),ForeColor=Ink,Cursor=Cursors.Hand,Font=new Font(Font.FontFamily,10),Margin=new Padding(0,0,8,0),Dock=DockStyle.None};
-            button.FlatAppearance.BorderSize=1;button.FlatAppearance.BorderColor=primary?Color.FromArgb(47,132,127):Color.FromArgb(47,64,84);return button;
+            RoundPanel chip=new RoundPanel{Dock=DockStyle.Fill,BackColor=Ui.SurfaceHi,BorderColor=Color.FromArgb(40,53,72),Radius=9,Margin=new Padding(column==0?0:5,0,column==3?0:5,0),Padding=new Padding(12,7,8,6)};
+            chip.Controls.Add(new Label{Text=value,Dock=DockStyle.Fill,ForeColor=Ink,Font=new Font(Ui.TextFont,10.5f,FontStyle.Bold)});
+            chip.Controls.Add(new Label{Text=name,Dock=DockStyle.Top,Height=20,ForeColor=Muted,Font=new Font(Ui.TextFont,8.5f)});
+            return chip;
+        }
+        Control CardTitle(string glyph,string text)
+        {
+            Panel row=new Panel{Dock=DockStyle.Top,Height=44};
+            Font icons=Ui.Icons(13);
+            if(icons!=null)row.Controls.Add(new Label{Text=glyph,Font=icons,ForeColor=Accent,Location=new Point(0,4),Size=new Size(28,28),TextAlign=ContentAlignment.MiddleLeft});
+            row.Controls.Add(new Label{Text=text,Font=new Font(Ui.TextFont,13,FontStyle.Bold),ForeColor=Ink,Location=new Point(icons==null?0:30,2),Size=new Size(300,32)});
+            return row;
+        }
+        Control RuleRow(string text)
+        {
+            Panel row=new Panel{Dock=DockStyle.Top,Height=36};
+            row.Paint+=delegate(object sender,PaintEventArgs args)
+            {
+                args.Graphics.SmoothingMode=SmoothingMode.AntiAlias;
+                using(Brush dot=new SolidBrush(Ui.AccentDeep))args.Graphics.FillEllipse(dot,0,9,18,18);
+                using(Pen tick=new Pen(Accent,1.8f){StartCap=LineCap.Round,EndCap=LineCap.Round,LineJoin=LineJoin.Round})
+                    args.Graphics.DrawLines(tick,new[]{new PointF(5,18.2f),new PointF(8,21),new PointF(13.2f,15)});
+                using(Pen line=new Pen(Color.FromArgb(30,40,55)))args.Graphics.DrawLine(line,30,row.Height-1,row.Width,row.Height-1);
+            };
+            row.Controls.Add(new Label{Text=text,Location=new Point(30,6),Size=new Size(360,26),ForeColor=Ink,TextAlign=ContentAlignment.MiddleLeft});
+            return row;
         }
         Button QuietButton(string text)
         {
-            Button button=FlatButton(text,true);button.Dock=DockStyle.Fill;quietButtons.Add(button);
+            DashboardButton button=new DashboardButton{Kind=ButtonKind.Primary,Text=text,Glyph="",Font=new Font(Ui.TextFont,10.5f,FontStyle.Bold),Dock=DockStyle.Fill,Margin=Padding.Empty};quietButtons.Add(button);
             button.Click+=async delegate{if(session!=null)await Run(delegate{session.Enable();});};return button;
         }
         Button AutoButton()
         {
-            Button button=FlatButton("恢復自動散熱",false);button.Dock=DockStyle.Fill;autoButtons.Add(button);
+            DashboardButton button=new DashboardButton{Kind=ButtonKind.Secondary,Text="恢復自動散熱",Glyph="",Font=new Font(Ui.TextFont,10.5f),Dock=DockStyle.Fill,Margin=Padding.Empty};autoButtons.Add(button);
             button.Click+=async delegate{if(session!=null)await Run(delegate{session.Restore("已恢復原廠自動散熱。");});};return button;
         }
-        Panel ModeTile(string heading,string value,string description,Button button)
+        Panel ModeTile(string glyph,string heading,string value,string description,Color valueColor,Button button)
         {
-            Panel card=new Panel{Dock=DockStyle.Fill,BackColor=Surface,Margin=new Padding(0,0,12,0),Padding=new Padding(18)};
-            card.Controls.Add(new Label{Text=heading,Dock=DockStyle.Top,Height=30,ForeColor=Muted});
-            Label large=new Label{Text=value,Dock=DockStyle.Top,Height=44,Font=new Font(Font.FontFamily,20),ForeColor=Accent};
-            Label text=new Label{Text=description,Dock=DockStyle.Fill,ForeColor=Muted,Padding=new Padding(0,8,0,0)};
-            button.Dock=DockStyle.Bottom;button.Height=42;
-            card.Controls.Add(text);card.Controls.Add(large);card.Controls.Add(button);large.BringToFront();text.BringToFront();return card;
+            RoundPanel card=new RoundPanel{Dock=DockStyle.Fill,Padding=new Padding(22,18,22,20)};
+            Panel head=new Panel{Dock=DockStyle.Top,Height=28};
+            Font icons=Ui.Icons(12);
+            if(icons!=null)head.Controls.Add(new Label{Text=glyph,Font=icons,ForeColor=Muted,Location=new Point(0,3),Size=new Size(24,22)});
+            head.Controls.Add(new Label{Text=heading,ForeColor=Muted,Location=new Point(icons==null?0:26,2),Size=new Size(300,24)});
+            Label large=new Label{Text=value,Dock=DockStyle.Top,Height=46,Font=new Font(Ui.TextFont,19,FontStyle.Bold),ForeColor=valueColor};
+            Label text=new Label{Text=description,Dock=DockStyle.Fill,ForeColor=Muted,Padding=new Padding(0,6,0,0)};
+            button.Dock=DockStyle.Bottom;button.Height=44;
+            card.Controls.Add(text);card.Controls.Add(button);card.Controls.Add(large);card.Controls.Add(head);return card;
         }
         void ShowPage(int index)
         {
             string[] titles={"即時總覽","風扇控制","保護與紀錄"};
             string[] descriptions={"查看即時狀態，快速切換已驗證的安靜模式。","選擇低速或原廠自動管理，查看本輪剩餘時間。","查看恢復條件，以及本次開啟期間的操作紀錄。"};
-            for(int i=0;i<3;i++){pages[i].Visible=i==index;navigation[i].BackColor=i==index?Color.FromArgb(31,72,81):Color.FromArgb(18,28,41);navigation[i].ForeColor=i==index?Accent:Muted;}
+            for(int i=0;i<3;i++){pages[i].Visible=i==index;navigation[i].Selected=i==index;}
             pages[index].BringToFront();title.Text=titles[index];subtitle.Text=descriptions[index];
         }
         void Log(string message)
         {
-            events.Add(DateTime.Now.ToString("HH:mm:ss")+"  "+message);if(events.Count>120)events.RemoveAt(0);
+            events.Add(DateTime.Now.ToString("HH:mm:ss")+"   "+message);if(events.Count>120)events.RemoveAt(0);
             eventLog.Text=String.Join(Environment.NewLine+Environment.NewLine,events.ToArray());eventLog.SelectionStart=eventLog.TextLength;eventLog.ScrollToCaret();
         }
         async Task Run(Action action,bool clearError=true)
@@ -284,9 +544,11 @@ namespace VictusQuiet
         {
             fan1.Text=data==null?"—":(data.Fan1*100).ToString();fan2.Text=data==null?"—":(data.Fan2*100).ToString();
             zone.Text=data==null?"—":Value(data.ZoneC);gpu.Text=data==null?"—":Value(data.GpuC);
+            zoneBar.Value=data==null?Double.NaN:data.ZoneC;gpuBar.Value=data==null?Double.NaN:data.GpuC;
             load.Text=data==null?"CPU 負載 —　 GPU 負載 —":"CPU 負載 "+Value(data.CpuLoad)+"%　 GPU 負載 "+Value(data.GpuLoad)+"%";
             string modeName=state==CoolingMode.Quiet?"安靜模式":state==CoolingMode.RecoveryFailed?"恢復待確認":"原有管理方式";
-            currentMode.Text="目前："+modeName;controlMode.Text=modeName;
+            Color modeColor=state==CoolingMode.Quiet?Accent:state==CoolingMode.RecoveryFailed?Ui.Danger:Ink;
+            currentMode.Text="目前："+modeName;controlMode.Text=modeName;currentMode.ForeColor=modeColor;controlMode.ForeColor=modeColor;
             countdown.Text=state==CoolingMode.Quiet?"本輪剩餘 "+TimeSpan.FromSeconds(seconds).ToString(@"m\:ss"):"每次低速最多 5 分鐘";
             controlTimer.Text=state==CoolingMode.Quiet?"目標約 1800 RPM · "+countdown.Text:"按下安靜模式後才會套用低速。";
             sessionProgress.Value=Math.Max(0,Math.Min(300,seconds));
