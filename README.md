@@ -1,14 +1,18 @@
-# Victus Fan Control Panel
+# Victus Control Center
 
-針對特定 HP Victus 筆電製作的 Windows 桌面風扇控制面板，提供約 1800 RPM 的短時間安靜模式與原廠自動散熱交接。
+針對特定 HP Victus 筆電製作的 Windows 桌面控制中心：提供約 1800 RPM 的短時間安靜模式與原廠自動散熱交接，以及內建／外接螢幕的亮度調整。
 
-**實驗性、機型限定工具。** 目前只允許主機板 **88F8／BIOS F.25** 啟用控制。已短暫實測的配置為 HP Victus 16-d0xxx、Intel Core i5-11400H、NVIDIA RTX 3060 Laptop GPU；不代表其他同系列配置均已驗證。這不是 HP 官方軟體。
+> 原名 Victus Fan Control Panel（`victus-fan-control-panel`），v0.2 加入螢幕亮度後改名；舊網址會自動轉到這裡。執行檔名稱仍為 `VictusControlPanel.exe`。
 
-[下載最新版本](https://github.com/baka9881/victus-fan-control-panel/releases/latest) · [回報問題](https://github.com/baka9881/victus-fan-control-panel/issues) · [MIT 授權](LICENSE)
+**實驗性、機型限定工具。** 目前只允許主機板 **88F8／BIOS F.25** 啟用風扇控制（螢幕亮度不限機型）。已短暫實測的配置為 HP Victus 16-d0xxx、Intel Core i5-11400H、NVIDIA RTX 3060 Laptop GPU；不代表其他同系列配置均已驗證。這不是 HP 官方軟體。
 
-![控制面板：範例讀值預覽](docs/control-panel.png)
+[下載最新版本](https://github.com/baka2496/victus-control-center/releases/latest) · [回報問題](https://github.com/baka2496/victus-control-center/issues) · [MIT 授權](LICENSE)
 
-*畫面使用範例讀值，未執行硬體控制。*
+![控制中心：範例讀值預覽](docs/control-panel.png)
+
+![螢幕亮度：範例螢幕預覽](docs/brightness.png)
+
+*畫面使用範例讀值與範例螢幕，未執行硬體控制。*
 
 ## 功能
 
@@ -18,14 +22,16 @@
 - 隨時恢復自動散熱，正常關閉時也會先恢復。
 - 溫度、負載升高或讀值失效時提前恢復散熱；附獨立備援程序。
 - 本次操作紀錄與圓形黑白圖示。
+- **螢幕亮度**：不需要管理員權限。內建螢幕透過 Windows 亮度控制（WMI），外接螢幕透過 DDC/CI（需在螢幕選單開啟）。可拖曳滑桿、用滾輪或方向鍵每次調 5%，或直接選 25／50／75／100%。
 
 不提供強制停轉、1 RPM、任意轉速或開機自動套用設定。
 
 ## 使用方式
 
-1. 從 [Releases](https://github.com/baka9881/victus-fan-control-panel/releases/latest) 下載 `VictusControlPanel.exe`，或下載可攜 ZIP。
+1. 從 [Releases](https://github.com/baka2496/victus-control-center/releases/latest) 下載 `VictusControlPanel.exe`，或下載可攜 ZIP。
 2. 開啟程式，按「取得管理員權限」，完成 Windows 權限提示。
 3. 在低負載、低溫時按「啟用安靜模式」。需要交回原廠管理時按「恢復自動散熱」。
+4. 要調亮度時，切到「螢幕亮度」分頁；接上或拔掉螢幕後按「重新偵測」。亮度直接寫入螢幕，關閉程式後仍會保留。
 
 開啟程式本身不會套用轉速。無效讀值或不符機型時，控制會停用。單一執行檔可直接使用，不會安裝驅動、服務或開機啟動項目，也不修改 BIOS 的 Fan Always On。
 
@@ -68,7 +74,9 @@
 .\test.ps1
 ```
 
-測試包含九項控制行為與七種尺寸的 Windows 原生圖示透明度檢查，**不調整硬體轉速**。測試產物寫入 `artifacts/tests/`，不執行刪除或清理命令。
+測試包含九項控制行為、六項螢幕亮度邏輯（名稱比對、百分比換算），以及七種尺寸的 Windows 原生圖示透明度檢查，**不調整硬體轉速，也不改變螢幕亮度**。
+
+若要在實機確認亮度控制，可另外執行 `artifacts\tests\Display.Tests.exe --hardware`：會把每個螢幕暫時調暗 10%，讀回確認後再調回原值。測試產物寫入 `artifacts/tests/`，不執行刪除或清理命令。
 
 控制測試涵蓋無效讀值拒絕啟動、監測中斷、溫度／負載升高、五分鐘上限、恢復失敗及重試、獨立恢復結果，以及風扇未維持目標範圍。獨立備援的程序握手曾於本機驗證；沒有故意讓實機當機來測試恢復。
 
@@ -79,7 +87,8 @@
 | `src/QuietCore.cs` | 安靜模式、保護條件、時間限制與恢復狀態 |
 | `src/QuietHardware.cs` | 限定機型的 HP WMI 控制、ACPI 與 NVIDIA 讀取 |
 | `src/QuietRecovery.cs` | 獨立程序與共享記憶體備援 |
-| `src/QuietDashboard.cs` | Windows Forms 控制面板 |
+| `src/QuietDisplay.cs` | 螢幕偵測與亮度控制（WMI 內建螢幕、DDC/CI 外接螢幕） |
+| `src/QuietDashboard.cs` | Windows Forms 控制中心介面 |
 | `src/QuietApp.cs` | 程式入口與單一控制實例 |
 | `tests/` | 不操作硬體的測試 |
 | `tools/New-AppIcon.ps1` | 圓形圖示與透明遮罩產生器 |

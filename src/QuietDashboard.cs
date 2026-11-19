@@ -5,6 +5,7 @@ using System.Diagnostics;
 using System.Drawing;
 using System.Drawing.Drawing2D;
 using System.Drawing.Text;
+using System.Linq;
 using System.Runtime.InteropServices;
 using System.Threading.Tasks;
 using System.Windows.Forms;
@@ -264,13 +265,128 @@ namespace VictusQuiet
         }
     }
 
+    sealed class BrightnessSlider : Control
+    {
+        int value;
+        bool dragging, hovered;
+        public event EventHandler ValueChanged;
+        public int Value { get { return value; } set { int next = Math.Max(0, Math.Min(100, value)); if (next == this.value) return; this.value = next; Invalidate(); } }
+        public BrightnessSlider()
+        {
+            SetStyle(ControlStyles.UserPaint | ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.ResizeRedraw | ControlStyles.Selectable, true);
+            TabStop = true; Cursor = Cursors.Hand; Height = 34;
+        }
+        RectangleF Track { get { return new RectangleF(10, Height / 2f - 3, Math.Max(1, Width - 20), 6); } }
+        void FromUser(int next) { int old = value; Value = next; if (value != old && ValueChanged != null) ValueChanged(this, EventArgs.Empty); }
+        int FromX(int x) { RectangleF track = Track; return (int)Math.Round((x - track.X) / track.Width * 100); }
+        protected override void OnMouseDown(MouseEventArgs args) { Focus(); dragging = true; FromUser(FromX(args.X)); base.OnMouseDown(args); }
+        protected override void OnMouseMove(MouseEventArgs args) { if (dragging) FromUser(FromX(args.X)); base.OnMouseMove(args); }
+        protected override void OnMouseUp(MouseEventArgs args) { dragging = false; base.OnMouseUp(args); }
+        protected override void OnMouseEnter(EventArgs args) { hovered = true; Invalidate(); base.OnMouseEnter(args); }
+        protected override void OnMouseLeave(EventArgs args) { hovered = false; Invalidate(); base.OnMouseLeave(args); }
+        protected override void OnMouseWheel(MouseEventArgs args) { FromUser(value + (args.Delta > 0 ? 5 : -5)); base.OnMouseWheel(args); }
+        protected override void OnGotFocus(EventArgs args) { Invalidate(); base.OnGotFocus(args); }
+        protected override void OnLostFocus(EventArgs args) { Invalidate(); base.OnLostFocus(args); }
+        protected override bool IsInputKey(Keys key) { return key == Keys.Left || key == Keys.Right || key == Keys.Up || key == Keys.Down || base.IsInputKey(key); }
+        protected override void OnKeyDown(KeyEventArgs args)
+        {
+            if (args.KeyCode == Keys.Left || args.KeyCode == Keys.Down) FromUser(value - 5);
+            else if (args.KeyCode == Keys.Right || args.KeyCode == Keys.Up) FromUser(value + 5);
+            else if (args.KeyCode == Keys.PageDown) FromUser(value - 10);
+            else if (args.KeyCode == Keys.PageUp) FromUser(value + 10);
+            else if (args.KeyCode == Keys.Home) FromUser(0);
+            else if (args.KeyCode == Keys.End) FromUser(100);
+            base.OnKeyDown(args);
+        }
+        protected override void OnPaint(PaintEventArgs args)
+        {
+            Graphics g = args.Graphics; g.Clear(Ui.Outer(this)); g.SmoothingMode = SmoothingMode.AntiAlias;
+            RectangleF track = Track;
+            using (GraphicsPath path = Ui.Round(track, 3)) using (Brush brush = new SolidBrush(Color.FromArgb(38,50,68))) g.FillPath(brush, path);
+            float x = track.X + track.Width * value / 100f;
+            if (x > track.X + 1)
+                using (GraphicsPath path = Ui.Round(new RectangleF(track.X, track.Y, x - track.X, track.Height), 3))
+                using (Brush brush = new LinearGradientBrush(new RectangleF(track.X - 1, track.Y, track.Width + 2, track.Height), Ui.Mix(Ui.Warn, Ui.Canvas, .25f), Ui.Warn, LinearGradientMode.Horizontal))
+                    g.FillPath(brush, path);
+            float cy = Height / 2f, radius = hovered || dragging ? 9.5f : 8.5f;
+            if (Focused) using (Brush glow = new SolidBrush(Color.FromArgb(60, Ui.Warn))) g.FillEllipse(glow, x - radius - 5, cy - radius - 5, (radius + 5) * 2, (radius + 5) * 2);
+            using (Brush thumb = new SolidBrush(Ui.Ink)) g.FillEllipse(thumb, x - radius, cy - radius, radius * 2, radius * 2);
+            using (Pen ring = new Pen(Ui.Warn, 2.4f)) g.DrawEllipse(ring, x - radius + 1.2f, cy - radius + 1.2f, radius * 2 - 2.4f, radius * 2 - 2.4f);
+        }
+    }
+
+    // One monitor: name, live percentage, slider and presets. Writes are debounced and run off the UI thread.
+    sealed class BrightnessCard : RoundPanel
+    {
+        readonly DisplayTarget target;
+        readonly BrightnessSlider slider;
+        readonly Label value, note;
+        readonly System.Windows.Forms.Timer apply = new System.Windows.Forms.Timer { Interval = 150 };
+        readonly bool preview;
+        int pending = -1;
+        bool working;
+        public BrightnessCard(DisplayTarget target, bool preview)
+        {
+            this.target = target; this.preview = preview; Padding = new Padding(22,16,22,14);
+            note = new Label { Dock = DockStyle.Fill, ForeColor = Ui.Faint, Font = new Font(Ui.TextFont, 9), Text = "", Padding = new Padding(0,6,0,0) };
+            TableLayoutPanel presets = new TableLayoutPanel { Dock = DockStyle.Top, Height = 36, ColumnCount = 4, RowCount = 1, Margin = Padding.Empty };
+            int[] levels = { 25, 50, 75, 100 };
+            for (int i = 0; i < 4; i++)
+            {
+                int level = levels[i];
+                presets.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 25));
+                DashboardButton button = new DashboardButton { Kind = ButtonKind.Secondary, Text = level + "%", Font = new Font(Ui.TextFont, 9.5f), Dock = DockStyle.Fill, Margin = new Padding(i == 0 ? 0 : 4, 0, i == 3 ? 0 : 4, 0) };
+                button.Click += delegate { slider.Value = level; Request(level); };
+                presets.Controls.Add(button, i, 0);
+            }
+            presets.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+            slider = new BrightnessSlider { Dock = DockStyle.Top, Value = target.Percent };
+            slider.ValueChanged += delegate { Request(slider.Value); };
+            Panel gap = new Panel { Dock = DockStyle.Top, Height = 8 };
+            value = new Label { Dock = DockStyle.Top, Height = 50, Text = target.Percent + "%", Font = Ui.Numbers(24), ForeColor = Ui.Ink, TextAlign = ContentAlignment.MiddleLeft };
+            Panel head = new Panel { Dock = DockStyle.Top, Height = 28 };
+            Font icons = Ui.Icons(13);
+            // Docked side by side (icon | name | kind) so nothing overlaps.
+            head.Controls.Add(new Label { Text = target.Name, Dock = DockStyle.Fill, Padding = new Padding(0, 0, 6, 0), Font = new Font(Ui.TextFont, 12, FontStyle.Bold), ForeColor = Ui.Ink, TextAlign = ContentAlignment.MiddleLeft, AutoEllipsis = true });
+            head.Controls.Add(new Label { Text = target.Kind, Dock = DockStyle.Right, Width = 180, ForeColor = Ui.Muted, Font = new Font(Ui.TextFont, 9), TextAlign = ContentAlignment.MiddleRight });
+            if (icons != null) head.Controls.Add(new Label { Text = target.Internal ? "" : "", Font = icons, ForeColor = Ui.Warn, Dock = DockStyle.Left, Width = 30, TextAlign = ContentAlignment.MiddleLeft });
+            Controls.Add(note); Controls.Add(presets); Controls.Add(gap); Controls.Add(slider); Controls.Add(value); Controls.Add(head);
+            apply.Tick += delegate { apply.Stop(); Push(); };
+        }
+        void Request(int percent) { pending = percent; value.Text = percent + "%"; apply.Stop(); apply.Start(); }
+        async void Push()
+        {
+            if (working || pending < 0) return;
+            int percent = pending; pending = -1; working = true; string failure = null;
+            try { if (!preview) await Task.Run(delegate { target.SetPercent(percent); }); }
+            catch (Exception error) { failure = error.Message; }
+            working = false;
+            if (IsDisposed) return;
+            note.Text = failure ?? ""; note.ForeColor = failure == null ? Ui.Faint : Ui.Danger;
+            if (pending >= 0) Push();
+        }
+        protected override void Dispose(bool disposing) { if (disposing) { apply.Stop(); apply.Dispose(); } base.Dispose(disposing); }
+    }
+
+    // Fixed values for --render-display; never touches real screens.
+    sealed class PreviewDisplay : DisplayTarget
+    {
+        public PreviewDisplay(string name, string kind, bool isInternal, int current) { Name = name; Kind = kind; Internal = isInternal; Minimum = 0; Maximum = 100; Current = current; }
+        public override void SetPercent(int percent) { Current = percent; }
+    }
+
     sealed class QuietWindow : Form
     {
         static readonly Color Canvas = Ui.Canvas, Surface = Ui.Surface, Muted = Ui.Muted, Ink = Ui.Ink, Accent = Ui.Accent;
         readonly bool preview;
         readonly string previewScene;
-        readonly Panel[] pages = new Panel[3];
-        readonly DashboardButton[] navigation = new DashboardButton[3];
+        readonly Panel[] pages = new Panel[4];
+        readonly DashboardButton[] navigation = new DashboardButton[4];
+        readonly List<DisplayTarget> displays = new List<DisplayTarget>();
+        Panel displayHost;
+        Label displayNote;
+        DashboardButton rescan;
+        bool displaysLoaded, scanning;
         readonly List<Button> quietButtons = new List<Button>(), autoButtons = new List<Button>();
         readonly List<string> events = new List<string>();
         readonly Label title, subtitle, connection, fan1, fan2, zone, gpu, load, currentMode, countdown, controlMode, controlTimer, status, refreshed;
@@ -303,7 +419,7 @@ namespace VictusQuiet
         public QuietWindow(bool preview, string scene = "quiet")
         {
             this.preview = preview; previewScene = scene;
-            Text = "Victus 風扇控制面板"; Icon = System.Drawing.Icon.ExtractAssociatedIcon(Application.ExecutablePath); ClientSize = new Size(1080,700); MinimumSize = new Size(960,690);
+            Text = "Victus 控制中心"; Icon = System.Drawing.Icon.ExtractAssociatedIcon(Application.ExecutablePath); ClientSize = new Size(1080,700); MinimumSize = new Size(960,690);
             StartPosition = FormStartPosition.CenterScreen; AutoScaleMode = AutoScaleMode.Dpi;
             Font = new Font(Ui.TextFont,10); BackColor = Canvas; ForeColor = Ink;
 
@@ -318,11 +434,11 @@ namespace VictusQuiet
                 if (Icon != null) using (Bitmap picture = Icon.ToBitmap()) args.Graphics.DrawImage(picture, new Rectangle(26, 32, 28, 28));
             };
             Label brand = LabelAt("VICTUS",70,24,120,28,15,Ink); brand.Font = new Font("Bahnschrift SemiBold", 16); side.Controls.Add(brand);
-            side.Controls.Add(LabelAt("風扇控制台",71,50,120,20,9,Muted));
+            side.Controls.Add(LabelAt("控制中心",71,50,120,20,9,Muted));
             side.Controls.Add(LabelAt("功能",22,104,120,20,8,Ui.Faint));
-            string[] names = { "即時總覽", "風扇控制", "保護與紀錄" };
-            string[] glyphs = { "", "", "" };
-            for (int i=0; i<3; i++)
+            string[] names = { "即時總覽", "風扇控制", "保護與紀錄", "螢幕亮度" };
+            string[] glyphs = { "", "", "", "" };
+            for (int i=0; i<4; i++)
             {
                 int page = i;
                 DashboardButton button = new DashboardButton { Kind = ButtonKind.Nav, Text = names[i], Glyph = glyphs[i], Font = new Font(Ui.TextFont, 10.5f), TextAlign = ContentAlignment.MiddleLeft, Location = new Point(12, 128 + i*52), Size = new Size(172, 44) };
@@ -357,7 +473,8 @@ namespace VictusQuiet
             statusCard.Controls.Add(status); footer.Controls.Add(statusCard);
             Panel host = new Panel { Dock = DockStyle.Fill };
             main.Controls.Add(host); main.Controls.Add(footer); main.Controls.Add(header);
-            for(int i=0;i<3;i++) { pages[i]=new Panel { Dock=DockStyle.Fill }; host.Controls.Add(pages[i]); }
+            for(int i=0;i<4;i++) { pages[i]=new Panel { Dock=DockStyle.Fill }; host.Controls.Add(pages[i]); }
+            BuildDisplayPage(pages[3]);
 
             // Overview: live metric cards, history and quick controls.
             TableLayoutPanel cards = Grid(4); cards.Dock=DockStyle.Top; cards.Height=126;
@@ -444,7 +561,7 @@ namespace VictusQuiet
                 await Run(delegate{session.Restore("已恢復自動散熱，可以關閉。");});
                 if(!session.NeedsRecovery){allowClose=true;Close();}else timer.Start();
             };
-            FormClosed+=delegate{timer.Stop();timer.Dispose();if(guard!=null)guard.Dispose();if(device!=null)device.Dispose();};
+            FormClosed+=delegate{timer.Stop();timer.Dispose();if(guard!=null)guard.Dispose();if(device!=null)device.Dispose();foreach(DisplayTarget display in displays)display.Dispose();displays.Clear();};
             ShowPage(0); UpdateView(false);
         }
 
@@ -523,10 +640,50 @@ namespace VictusQuiet
         }
         void ShowPage(int index)
         {
-            string[] titles={"即時總覽","風扇控制","保護與紀錄"};
-            string[] descriptions={"查看即時狀態，快速切換已驗證的安靜模式。","選擇低速或原廠自動管理，查看本輪剩餘時間。","查看恢復條件，以及本次開啟期間的操作紀錄。"};
-            for(int i=0;i<3;i++){pages[i].Visible=i==index;navigation[i].Selected=i==index;}
+            string[] titles={"即時總覽","風扇控制","保護與紀錄","螢幕亮度"};
+            string[] descriptions={"查看即時狀態，快速切換已驗證的安靜模式。","選擇低速或原廠自動管理，查看本輪剩餘時間。","查看恢復條件，以及本次開啟期間的操作紀錄。","調整內建與外接螢幕的亮度，不需要管理員權限。"};
+            for(int i=0;i<4;i++){pages[i].Visible=i==index;navigation[i].Selected=i==index;}
             pages[index].BringToFront();title.Text=titles[index];subtitle.Text=descriptions[index];
+            if(index==3 && !displaysLoaded && !preview) { var ignored=ScanDisplays(); }
+        }
+        void BuildDisplayPage(Panel page)
+        {
+            Panel bar=new Panel{Dock=DockStyle.Top,Height=54};
+            displayNote=LabelAt("尚未偵測螢幕",2,12,620,26,10,Muted);
+            rescan=new DashboardButton{Kind=ButtonKind.Secondary,Text="重新偵測",Glyph="",Font=new Font(Ui.TextFont,10),Size=new Size(140,38)};
+            rescan.Click+=async delegate{await ScanDisplays();};
+            bar.Controls.AddRange(new Control[]{displayNote,rescan});
+            bar.Resize+=delegate{rescan.Location=new Point(bar.Width-140,2);};
+            displayHost=new Panel{Dock=DockStyle.Fill,AutoScroll=true};
+            displayHost.Resize+=delegate{LayoutDisplays();};
+            Label hint=new Label{Dock=DockStyle.Bottom,Height=30,ForeColor=Ui.Faint,Font=new Font(Ui.TextFont,9),TextAlign=ContentAlignment.MiddleLeft,
+                Text="外接螢幕需要在螢幕本身的選單開啟 DDC/CI。亮度直接寫進螢幕，關掉這個程式後也會保留。"};
+            page.Controls.Add(displayHost); page.Controls.Add(hint); page.Controls.Add(bar);
+        }
+        void ShowDisplays(List<DisplayTarget> found)
+        {
+            foreach(Control card in new List<Control>(displayHost.Controls.Cast<Control>())){displayHost.Controls.Remove(card);card.Dispose();}
+            foreach(DisplayTarget display in displays)display.Dispose();
+            displays.Clear();
+            foreach(DisplayTarget display in found){displays.Add(display);displayHost.Controls.Add(new BrightnessCard(display,preview));}
+            LayoutDisplays();
+        }
+        void LayoutDisplays()
+        {
+            if(displayHost==null)return;
+            int gap=14,count=displayHost.Controls.Count,columns=displayHost.ClientSize.Width>=640?2:1;
+            int width=(displayHost.ClientSize.Width-gap*(columns-1))/columns;
+            for(int i=0;i<count;i++)displayHost.Controls[i].Bounds=new Rectangle((i%columns)*(width+gap),(i/columns)*(206+gap),width,206);
+        }
+        async Task ScanDisplays()
+        {
+            if(scanning)return; scanning=true; rescan.Enabled=false; displayNote.Text="正在偵測螢幕…";
+            List<DisplayTarget> found=null; string failure=null;
+            try{found=await Task.Run(delegate{return DisplayBrightness.Discover();});}catch(Exception error){failure=error.Message;}
+            if(IsDisposed){if(found!=null)foreach(DisplayTarget display in found)display.Dispose();return;}
+            ShowDisplays(found??new List<DisplayTarget>());
+            displayNote.Text=failure!=null?"偵測失敗："+failure:displays.Count==0?"找不到可以調整亮度的螢幕。":"找到 "+displays.Count+" 個螢幕，拖曳滑桿或按百分比按鈕就能調整。";
+            scanning=false; rescan.Enabled=true; displaysLoaded=true;
         }
         void Log(string message)
         {
@@ -575,6 +732,11 @@ namespace VictusQuiet
             status.Text="介面預覽 · 範例讀值，未控制風扇。\r\n轉速為 BIOS 等級估計；ACPI 熱區並非 CPU 核心溫度。";
             Log("控制面板已開啟。");if(!locked){Log("管理員連線完成，開始監看。");Log("啟用安靜模式，目標約 1800 RPM。");}
             if(previewScene=="controls")ShowPage(1);if(previewScene=="protection")ShowPage(2);
+            if(previewScene=="display")
+            {
+                ShowDisplays(new List<DisplayTarget>{new PreviewDisplay("內建螢幕","筆電面板 · Windows 亮度",true,100),new PreviewDisplay("VZ249HG","外接螢幕 · DDC/CI",false,65)});
+                displayNote.Text="介面預覽 · 範例螢幕，未調整亮度。"; ShowPage(3);
+            }
         }
     }
 }

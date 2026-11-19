@@ -86,7 +86,7 @@ namespace VictusQuiet
                 }
             }
             Application.EnableVisualStyles(); Application.SetCompatibleTextRenderingDefault(false);
-            bool render = args.Length == 2 && (args[0] == "--render" || args[0] == "--render-auto" || args[0] == "--render-locked" || args[0] == "--render-controls" || args[0] == "--render-protection");
+            bool render = args.Length == 2 && (args[0] == "--render" || args[0] == "--render-auto" || args[0] == "--render-locked" || args[0] == "--render-controls" || args[0] == "--render-protection" || args[0] == "--render-display");
             string scene = render && args[0] != "--render" ? args[0].Substring(9) : "quiet";
             using (QuietWindow window = new QuietWindow(render, scene))
             {
@@ -105,7 +105,7 @@ namespace VictusQuiet
                         if (IsAdmin())
                         {
                             try { owns = control.WaitOne(0); } catch (AbandonedMutexException) { owns = true; }
-                            if (!owns) { MessageBox.Show("已有 Victus 安靜風扇正在執行，請使用原來的視窗。", "Victus 安靜風扇"); return 2; }
+                            if (!owns) { MessageBox.Show("已有 Victus 控制中心正在執行，請使用原來的視窗。", "Victus 控制中心"); return 2; }
                         }
                         Application.Run(window);
                     }

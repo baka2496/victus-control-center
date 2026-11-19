@@ -6,7 +6,7 @@ $compiler = Join-Path $env:WINDIR 'Microsoft.NET\Framework64\v4.0.30319\csc.exe'
 if (-not (Test-Path -LiteralPath $compiler)) { throw 'The .NET Framework C# compiler was not found.' }
 $artifactDirectory = Join-Path $PSScriptRoot 'artifacts'
 New-Item -ItemType Directory -Path $artifactDirectory -Force | Out-Null
-$sources = @('AssemblyInfo.cs','QuietCore.cs','QuietHardware.cs','QuietRecovery.cs','QuietDashboard.cs','QuietApp.cs') | ForEach-Object { Join-Path $PSScriptRoot ('src\' + $_) }
+$sources = @('AssemblyInfo.cs','QuietCore.cs','QuietHardware.cs','QuietRecovery.cs','QuietDisplay.cs','QuietDashboard.cs','QuietApp.cs') | ForEach-Object { Join-Path $PSScriptRoot ('src\' + $_) }
 $manifest = Join-Path $PSScriptRoot 'src\app.manifest'
 $icon = Join-Path $PSScriptRoot 'assets\app.ico'
 $executable = Join-Path $artifactDirectory 'VictusControlPanel.exe'
