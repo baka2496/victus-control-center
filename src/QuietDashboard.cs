@@ -429,9 +429,8 @@ namespace VictusQuiet
             {
                 using (Pen line = new Pen(Color.FromArgb(28,37,51))) args.Graphics.DrawLine(line, side.Width - 1, 0, side.Width - 1, side.Height);
                 args.Graphics.SmoothingMode = SmoothingMode.AntiAlias; args.Graphics.InterpolationMode = InterpolationMode.HighQualityBicubic;
-                using (GraphicsPath badge = Ui.Round(new RectangleF(20, 26, 40, 40), 11))
-                using (Brush fill = new SolidBrush(Ui.AccentDeep)) args.Graphics.FillPath(fill, badge);
-                if (Icon != null) using (Bitmap picture = Icon.ToBitmap()) args.Graphics.DrawImage(picture, new Rectangle(26, 32, 28, 28));
+                // The app icon is itself a rounded tile; use the 48 px frame scaled to 42 px.
+                if (Icon != null) using (Icon large = new Icon(Icon, 48, 48)) using (Bitmap picture = large.ToBitmap()) args.Graphics.DrawImage(picture, new Rectangle(19, 25, 42, 42));
             };
             Label brand = LabelAt("VICTUS",70,24,120,28,15,Ink); brand.Font = new Font("Bahnschrift SemiBold", 16); side.Controls.Add(brand);
             side.Controls.Add(LabelAt("控制中心",71,50,120,20,9,Muted));
