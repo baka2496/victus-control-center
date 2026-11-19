@@ -8,9 +8,14 @@ $coreTests = Join-Path $testDirectory 'Quiet.Tests.exe'
 if ($LASTEXITCODE -ne 0) { throw 'Control tests failed to compile.' }
 & $coreTests
 if ($LASTEXITCODE -ne 0) { throw 'Control tests failed.' }
+$displayTests = Join-Path $testDirectory 'Display.Tests.exe'
+& $compiler /nologo /utf8output /codepage:65001 /warnaserror+ /target:exe /r:System.Management.dll "/out:$displayTests" (Join-Path $PSScriptRoot 'src\QuietDisplay.cs') (Join-Path $PSScriptRoot 'tests\DisplayTests.cs')
+if ($LASTEXITCODE -ne 0) { throw 'Display tests failed to compile.' }
+& $displayTests
+if ($LASTEXITCODE -ne 0) { throw 'Display tests failed.' }
 $nativeTests = Join-Path $testDirectory 'NativeIconTests.exe'
 & $compiler /nologo /utf8output /codepage:65001 /warnaserror+ /target:exe /r:System.Drawing.dll "/out:$nativeTests" (Join-Path $PSScriptRoot 'tests\NativeIconTests.cs')
 if ($LASTEXITCODE -ne 0) { throw 'Native icon tests failed to compile.' }
 & $nativeTests (Join-Path $PSScriptRoot 'assets\app.ico') $testDirectory
 if ($LASTEXITCODE -ne 0) { throw 'Native icon transparency tests failed.' }
-Write-Output 'All control and icon tests passed. No fan commands were sent.'
+Write-Output 'All control, display and icon tests passed. No fan or brightness commands were sent.'
