@@ -87,18 +87,19 @@ namespace VictusQuiet
             if (bytes[0] > 80 || bytes[1] > 80) throw new InvalidOperationException("風扇速度等級異常。");
             return new int[] { bytes[0], bytes[1] };
         }
-        void WritePositiveLevel(byte level)
+        void WritePositiveLevel(int level)
         {
-            if (level != 18 && level != 33 && level != 50) throw new InvalidOperationException("未開放此轉速等級。");
-            byte[] values = new byte[128]; values[0] = values[1] = level;
+            // Only positive levels between quiet (1800 RPM) and the emergency level (5000 RPM); never stop or 1 RPM.
+            if (level < FanLevels.Minimum || level > FanLevels.Maximum) throw new InvalidOperationException("未開放此轉速等級。");
+            byte[] values = new byte[128]; values[0] = values[1] = (byte)level;
             Call(0x10, new byte[4], 4); // Deliberate manual-state keepalive, never used by read-only polling.
             Call(0x2E, values, 0);
         }
-        public void ApplyQuiet()
+        public void ApplyLevel(int level)
         {
             Call(0x27, new byte[] { 0 }, 0);
             Call(0x1A, new byte[] { 255, 0, 0, 0 }, 0);
-            WritePositiveLevel(18);
+            WritePositiveLevel(level);
         }
         public void RestoreAutomatic()
         {
