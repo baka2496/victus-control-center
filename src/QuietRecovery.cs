@@ -7,7 +7,7 @@ using System.Threading;
 namespace VictusQuiet
 {
     // Layout: 0 needs recovery, 8 monotonic heartbeat, 16 ready, 20 externally recovered,
-    // 24 armed, 28 completed, 32 monotonic start. Nothing is written to disk.
+    // 24 armed, 28 completed, 32 monotonic start, 40 time limit in seconds (0 = none). Nothing is written to disk.
     public sealed class ProcessRecoveryGuard : IRecoveryGuard
     {
         MemoryMappedFile map;
@@ -44,9 +44,10 @@ namespace VictusQuiet
                 Thread.Sleep(50);
             }
         }
-        public void Arm()
+        public void Arm(int limitSeconds)
         {
             if (view == null || view.ReadInt32(16) != 1) throw new InvalidOperationException("備援尚未就緒。");
+            view.Write(40, Math.Max(0, limitSeconds));
             view.Write(8, Stopwatch.GetTimestamp()); view.Write(32, Stopwatch.GetTimestamp());
             view.Write(0, 1); view.Write(24, 1); view.Flush();
         }
@@ -85,7 +86,8 @@ namespace VictusQuiet
                         {
                             double age = (double)(Stopwatch.GetTimestamp() - shared.ReadInt64(8)) / Stopwatch.Frequency;
                             double duration = (double)(Stopwatch.GetTimestamp() - shared.ReadInt64(32)) / Stopwatch.Frequency;
-                            if (!alive || age > 8 || duration > 307)
+                            int limit = shared.ReadInt32(40);
+                            if (!alive || age > 8 || (limit > 0 && duration > limit))
                             {
                                 using (HpQuietDevice device = new HpQuietDevice())
                                 {

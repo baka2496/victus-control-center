@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.ComponentModel;
 using System.Diagnostics;
@@ -265,37 +265,45 @@ namespace VictusQuiet
         }
     }
 
-    sealed class BrightnessSlider : Control
+    // Rounded slider for any integer range; used for brightness (0-100 %) and fan levels (18-50).
+    sealed class ValueSlider : Control
     {
-        int value;
+        int value, minimum, maximum = 100;
         bool dragging, hovered;
+        public int Step = 5;
+        public int Marker = -1;
+        Color fill = Ui.Warn;
         public event EventHandler ValueChanged;
-        public int Value { get { return value; } set { int next = Math.Max(0, Math.Min(100, value)); if (next == this.value) return; this.value = next; Invalidate(); } }
-        public BrightnessSlider()
+        public Color FillColor { get { return fill; } set { if (fill == value) return; fill = value; Invalidate(); } }
+        public int Minimum { get { return minimum; } set { minimum = value; this.value = Math.Max(minimum, this.value); Invalidate(); } }
+        public int Maximum { get { return maximum; } set { maximum = Math.Max(minimum + 1, value); this.value = Math.Min(maximum, this.value); Invalidate(); } }
+        public int Value { get { return value; } set { int next = Math.Max(minimum, Math.Min(maximum, value)); if (next == this.value) return; this.value = next; Invalidate(); } }
+        public ValueSlider()
         {
             SetStyle(ControlStyles.UserPaint | ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.ResizeRedraw | ControlStyles.Selectable, true);
             TabStop = true; Cursor = Cursors.Hand; Height = 34;
         }
         RectangleF Track { get { return new RectangleF(10, Height / 2f - 3, Math.Max(1, Width - 20), 6); } }
+        float Ratio(int v) { return (v - minimum) / (float)(maximum - minimum); }
         void FromUser(int next) { int old = value; Value = next; if (value != old && ValueChanged != null) ValueChanged(this, EventArgs.Empty); }
-        int FromX(int x) { RectangleF track = Track; return (int)Math.Round((x - track.X) / track.Width * 100); }
+        int FromX(int x) { RectangleF track = Track; return minimum + (int)Math.Round((x - track.X) / track.Width * (maximum - minimum)); }
         protected override void OnMouseDown(MouseEventArgs args) { Focus(); dragging = true; FromUser(FromX(args.X)); base.OnMouseDown(args); }
         protected override void OnMouseMove(MouseEventArgs args) { if (dragging) FromUser(FromX(args.X)); base.OnMouseMove(args); }
         protected override void OnMouseUp(MouseEventArgs args) { dragging = false; base.OnMouseUp(args); }
         protected override void OnMouseEnter(EventArgs args) { hovered = true; Invalidate(); base.OnMouseEnter(args); }
         protected override void OnMouseLeave(EventArgs args) { hovered = false; Invalidate(); base.OnMouseLeave(args); }
-        protected override void OnMouseWheel(MouseEventArgs args) { FromUser(value + (args.Delta > 0 ? 5 : -5)); base.OnMouseWheel(args); }
+        protected override void OnMouseWheel(MouseEventArgs args) { FromUser(value + (args.Delta > 0 ? Step : -Step)); base.OnMouseWheel(args); }
         protected override void OnGotFocus(EventArgs args) { Invalidate(); base.OnGotFocus(args); }
         protected override void OnLostFocus(EventArgs args) { Invalidate(); base.OnLostFocus(args); }
         protected override bool IsInputKey(Keys key) { return key == Keys.Left || key == Keys.Right || key == Keys.Up || key == Keys.Down || base.IsInputKey(key); }
         protected override void OnKeyDown(KeyEventArgs args)
         {
-            if (args.KeyCode == Keys.Left || args.KeyCode == Keys.Down) FromUser(value - 5);
-            else if (args.KeyCode == Keys.Right || args.KeyCode == Keys.Up) FromUser(value + 5);
-            else if (args.KeyCode == Keys.PageDown) FromUser(value - 10);
-            else if (args.KeyCode == Keys.PageUp) FromUser(value + 10);
-            else if (args.KeyCode == Keys.Home) FromUser(0);
-            else if (args.KeyCode == Keys.End) FromUser(100);
+            if (args.KeyCode == Keys.Left || args.KeyCode == Keys.Down) FromUser(value - Step);
+            else if (args.KeyCode == Keys.Right || args.KeyCode == Keys.Up) FromUser(value + Step);
+            else if (args.KeyCode == Keys.PageDown) FromUser(value - Step * 2);
+            else if (args.KeyCode == Keys.PageUp) FromUser(value + Step * 2);
+            else if (args.KeyCode == Keys.Home) FromUser(minimum);
+            else if (args.KeyCode == Keys.End) FromUser(maximum);
             base.OnKeyDown(args);
         }
         protected override void OnPaint(PaintEventArgs args)
@@ -303,15 +311,20 @@ namespace VictusQuiet
             Graphics g = args.Graphics; g.Clear(Ui.Outer(this)); g.SmoothingMode = SmoothingMode.AntiAlias;
             RectangleF track = Track;
             using (GraphicsPath path = Ui.Round(track, 3)) using (Brush brush = new SolidBrush(Color.FromArgb(38,50,68))) g.FillPath(brush, path);
-            float x = track.X + track.Width * value / 100f;
+            float x = track.X + track.Width * Ratio(value);
             if (x > track.X + 1)
                 using (GraphicsPath path = Ui.Round(new RectangleF(track.X, track.Y, x - track.X, track.Height), 3))
-                using (Brush brush = new LinearGradientBrush(new RectangleF(track.X - 1, track.Y, track.Width + 2, track.Height), Ui.Mix(Ui.Warn, Ui.Canvas, .25f), Ui.Warn, LinearGradientMode.Horizontal))
+                using (Brush brush = new LinearGradientBrush(new RectangleF(track.X - 1, track.Y, track.Width + 2, track.Height), Ui.Mix(fill, Ui.Canvas, .25f), fill, LinearGradientMode.Horizontal))
                     g.FillPath(brush, path);
+            if (Marker > minimum && Marker < maximum)
+            {
+                float mx = track.X + track.Width * Ratio(Marker);
+                using (Pen tick = new Pen(Color.FromArgb(150, Ui.Ink), 2)) g.DrawLine(tick, mx, track.Y - 6, mx, track.Bottom + 6);
+            }
             float cy = Height / 2f, radius = hovered || dragging ? 9.5f : 8.5f;
-            if (Focused) using (Brush glow = new SolidBrush(Color.FromArgb(60, Ui.Warn))) g.FillEllipse(glow, x - radius - 5, cy - radius - 5, (radius + 5) * 2, (radius + 5) * 2);
+            if (Focused) using (Brush glow = new SolidBrush(Color.FromArgb(60, fill))) g.FillEllipse(glow, x - radius - 5, cy - radius - 5, (radius + 5) * 2, (radius + 5) * 2);
             using (Brush thumb = new SolidBrush(Ui.Ink)) g.FillEllipse(thumb, x - radius, cy - radius, radius * 2, radius * 2);
-            using (Pen ring = new Pen(Ui.Warn, 2.4f)) g.DrawEllipse(ring, x - radius + 1.2f, cy - radius + 1.2f, radius * 2 - 2.4f, radius * 2 - 2.4f);
+            using (Pen ring = new Pen(fill, 2.4f)) g.DrawEllipse(ring, x - radius + 1.2f, cy - radius + 1.2f, radius * 2 - 2.4f, radius * 2 - 2.4f);
         }
     }
 
@@ -319,7 +332,7 @@ namespace VictusQuiet
     sealed class BrightnessCard : RoundPanel
     {
         readonly DisplayTarget target;
-        readonly BrightnessSlider slider;
+        readonly ValueSlider slider;
         readonly Label value, note;
         readonly System.Windows.Forms.Timer apply = new System.Windows.Forms.Timer { Interval = 150 };
         readonly bool preview;
@@ -340,7 +353,7 @@ namespace VictusQuiet
                 presets.Controls.Add(button, i, 0);
             }
             presets.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
-            slider = new BrightnessSlider { Dock = DockStyle.Top, Value = target.Percent };
+            slider = new ValueSlider { Dock = DockStyle.Top, Value = target.Percent };
             slider.ValueChanged += delegate { Request(slider.Value); };
             Panel gap = new Panel { Dock = DockStyle.Top, Height = 8 };
             value = new Label { Dock = DockStyle.Top, Height = 50, Text = target.Percent + "%", Font = Ui.Numbers(24), ForeColor = Ui.Ink, TextAlign = ContentAlignment.MiddleLeft };
@@ -388,6 +401,8 @@ namespace VictusQuiet
         DashboardButton rescan;
         bool displaysLoaded, scanning;
         readonly List<Button> quietButtons = new List<Button>(), autoButtons = new List<Button>();
+        int selectedLevel=FanLevels.Quiet;
+        ValueSlider speedSlider; Label speedValue, speedZone, speedNote; DashboardButton applySpeed;
         readonly List<string> events = new List<string>();
         readonly Label title, subtitle, connection, fan1, fan2, zone, gpu, load, currentMode, countdown, controlMode, controlTimer, status, refreshed;
         readonly Button admin;
@@ -493,34 +508,34 @@ namespace VictusQuiet
             countdown=LabelAt("每次低速最多 5 分鐘",0,4,260,26,9,Muted); countdown.TextAlign=ContentAlignment.MiddleRight;
             actionRow.Controls.AddRange(new Control[]{currentMode,countdown});
             actionRow.Resize+=delegate{countdown.Location=new Point(actionRow.Width-260,4);};
-            TableLayoutPanel quick = Grid(2); quick.Dock=DockStyle.Fill;
-            Button quickQuiet=QuietButton("啟用安靜模式 · 約 1800 RPM"); quickQuiet.Margin=new Padding(0,0,7,0); quick.Controls.Add(quickQuiet,0,0);
-            Button quickAuto=AutoButton(); quickAuto.Margin=new Padding(7,0,0,0); quick.Controls.Add(quickAuto,1,0);
+            TableLayoutPanel quick = Grid(3); quick.Dock=DockStyle.Fill;
+            Button quickQuiet=LevelButton("安靜 · 1800 RPM",FanLevels.Quiet,ButtonKind.Primary,""); quickQuiet.Margin=new Padding(0,0,6,0); quick.Controls.Add(quickQuiet,0,0);
+            Button quickBoost=LevelButton("最大散熱 · 5000 RPM",FanLevels.Maximum,ButtonKind.Secondary,""); quickBoost.Margin=new Padding(6,0,6,0); quick.Controls.Add(quickBoost,1,0);
+            Button quickAuto=AutoButton(); quickAuto.Margin=new Padding(6,0,0,0); quick.Controls.Add(quickAuto,2,0);
             actions.Controls.Add(quick); actions.Controls.Add(actionRow);
             history=new FanHistory { Dock=DockStyle.Fill };
             pages[0].Controls.Add(history); pages[0].Controls.Add(actions); pages[0].Controls.Add(summary); pages[0].Controls.Add(cards);
 
             // Controls: two explicit modes, each backed by the existing controller.
-            RoundPanel modeHead=new RoundPanel { Dock=DockStyle.Top,Height=118,Padding=new Padding(22,0,22,18) };
-            modeHead.Controls.Add(LabelAt("目前模式",22,16,300,20,9,Ui.Faint));
-            controlMode=LabelAt("原有管理方式",20,36,560,40,19,Ink); controlMode.Font=new Font(Ui.TextFont,19,FontStyle.Bold);
-            controlTimer=LabelAt("尚未啟用低速",0,46,360,24,10,Muted); controlTimer.TextAlign=ContentAlignment.MiddleRight;
+            RoundPanel modeHead=new RoundPanel { Dock=DockStyle.Top,Height=104,Padding=new Padding(22,0,22,16) };
+            modeHead.Controls.Add(LabelAt("目前模式",22,14,300,20,9,Ui.Faint));
+            controlMode=LabelAt("原有管理方式",20,34,560,40,19,Ink); controlMode.Font=new Font(Ui.TextFont,19,FontStyle.Bold);
+            controlTimer=LabelAt("尚未手動設定",0,44,380,24,10,Muted); controlTimer.TextAlign=ContentAlignment.MiddleRight;
             modeHead.Controls.AddRange(new Control[]{controlMode,controlTimer});
-            modeHead.Resize+=delegate{controlTimer.Location=new Point(modeHead.Width-382,46);};
+            modeHead.Resize+=delegate{controlTimer.Location=new Point(modeHead.Width-402,44);};
             sessionProgress=new SessionProgress { Dock=DockStyle.Bottom,Height=12,Value=0 }; modeHead.Controls.Add(sessionProgress);
-            TableLayoutPanel modeTiles=Grid(2); modeTiles.Dock=DockStyle.Top; modeTiles.Height=236; modeTiles.Padding=new Padding(0,14,0,0);
-            Panel quietTile=ModeTile("","安靜模式","約 1800 RPM","兩個風扇一起降速。每次最多五分鐘，適合低負載時使用。",Accent,QuietButton("啟用低速"));
-            quietTile.Margin=new Padding(0,0,7,0); modeTiles.Controls.Add(quietTile,0,0);
-            Panel autoTile=ModeTile("","原廠自動管理","依溫度調整","解除本工具的低速設定，交回 BIOS 管理散熱。",Ink,AutoButton());
+            TableLayoutPanel modeTiles=Grid(2); modeTiles.Dock=DockStyle.Top; modeTiles.Height=286; modeTiles.Padding=new Padding(0,14,0,0);
+            modeTiles.ColumnStyles[0].Width=62; modeTiles.ColumnStyles[1].Width=38;
+            Panel speedTile=SpeedTile(); speedTile.Margin=new Padding(0,0,7,0); modeTiles.Controls.Add(speedTile,0,0);
+            Panel autoTile=ModeTile("","原廠自動管理","依溫度調整","解除本工具的手動轉速，交回 BIOS 管理散熱。",Ink,AutoButton());
             autoTile.Margin=new Padding(7,0,0,0); modeTiles.Controls.Add(autoTile,1,0);
             Panel conditionHost=new Panel { Dock=DockStyle.Fill,Padding=new Padding(0,14,0,0) };
-            RoundPanel conditions=new RoundPanel { Dock=DockStyle.Fill,Padding=new Padding(20,14,20,14) };
-            conditions.Controls.Add(new Label { Dock=DockStyle.Fill,ForeColor=Muted,Text="溫度或負載偏高時，面板會說明原因，保留原有散熱方式。",Padding=new Padding(0,12,0,0) });
-            TableLayoutPanel chips=Grid(4); chips.Dock=DockStyle.Top; chips.Height=62;
+            RoundPanel conditions=new RoundPanel { Dock=DockStyle.Fill,Padding=new Padding(20,12,20,12) };
+            TableLayoutPanel chips=Grid(4); chips.Dock=DockStyle.Top; chips.Height=58;
             string[,] rules={{"ACPI 熱區","低於 60°C"},{"GPU 溫度","低於 55°C"},{"CPU 負載","不超過 25%"},{"GPU 負載","不超過 30%"}};
             for(int i=0;i<4;i++) chips.Controls.Add(Chip(rules[i,0],rules[i,1],i),i,0);
             conditions.Controls.Add(chips);
-            conditions.Controls.Add(new Label { Text="啟用條件",Dock=DockStyle.Top,Height=30,ForeColor=Ink,Font=new Font(Ui.TextFont,11,FontStyle.Bold) });
+            conditions.Controls.Add(new Label { Text="低速（3300 RPM 以下）的啟用條件　·　3300 RPM 以上不受限制",Dock=DockStyle.Top,Height=28,ForeColor=Ink,Font=new Font(Ui.TextFont,10.5f,FontStyle.Bold) });
             conditionHost.Controls.Add(conditions);
             pages[1].Controls.Add(conditionHost); pages[1].Controls.Add(modeTiles); pages[1].Controls.Add(modeHead);
 
@@ -528,7 +543,7 @@ namespace VictusQuiet
             TableLayoutPanel protection=Grid(2); protection.Dock=DockStyle.Fill;
             RoundPanel rulesCard=new RoundPanel { Dock=DockStyle.Fill,Margin=new Padding(0,0,7,0),Padding=new Padding(22,18,20,18) };
             string[] restore={"ACPI 熱區達 60°C","GPU 溫度達 55°C","運算負載升高","溫度或風扇讀值失效","本輪低速滿五分鐘","正常關閉程式"};
-            Label backup=new Label { Dock=DockStyle.Bottom,Height=58,ForeColor=Accent,Text="另有獨立備援程序，在主程式中斷時嘗試恢復散熱。",TextAlign=ContentAlignment.MiddleLeft,Font=new Font(Ui.TextFont,9.5f) };
+            Label backup=new Label { Dock=DockStyle.Bottom,Height=76,ForeColor=Accent,Text="以上條件只適用 3300 RPM 以下的低速；3300 RPM 以上的加強散熱只會在讀值失效或風扇沒升上去時恢復。\r\n另有獨立備援程序，在主程式中斷時嘗試恢復散熱。",TextAlign=ContentAlignment.MiddleLeft,Font=new Font(Ui.TextFont,9.5f) };
             backup.Dock=DockStyle.Top; rulesCard.Controls.Add(backup);
             for(int i=restore.Length-1;i>=0;i--) rulesCard.Controls.Add(RuleRow(restore[i]));
             rulesCard.Controls.Add(CardTitle("","自動恢復條件"));
@@ -615,10 +630,40 @@ namespace VictusQuiet
             row.Controls.Add(new Label{Text=text,Location=new Point(30,6),Size=new Size(360,26),ForeColor=Ink,TextAlign=ContentAlignment.MiddleLeft});
             return row;
         }
-        Button QuietButton(string text)
+        Button LevelButton(string text,int level,ButtonKind kind,string glyph)
         {
-            DashboardButton button=new DashboardButton{Kind=ButtonKind.Primary,Text=text,Glyph="",Font=new Font(Ui.TextFont,10.5f,FontStyle.Bold),Dock=DockStyle.Fill,Margin=Padding.Empty};quietButtons.Add(button);
-            button.Click+=async delegate{if(session!=null)await Run(delegate{session.Enable();});};return button;
+            DashboardButton button=new DashboardButton{Kind=kind,Text=text,Glyph=glyph,Font=new Font(Ui.TextFont,10.5f,kind==ButtonKind.Primary?FontStyle.Bold:FontStyle.Regular),Dock=DockStyle.Fill,Margin=Padding.Empty,Tag=level};quietButtons.Add(button);
+            button.Click+=async delegate{if(session!=null)await Run(delegate{session.Enable(level);});};return button;
+        }
+        Panel SpeedTile()
+        {
+            RoundPanel card=new RoundPanel{Dock=DockStyle.Fill,Padding=new Padding(22,18,22,18)};
+            Panel head=new Panel{Dock=DockStyle.Top,Height=26};
+            Font icons=Ui.Icons(12);
+            if(icons!=null)head.Controls.Add(new Label{Text="",Font=icons,ForeColor=Muted,Location=new Point(0,3),Size=new Size(24,22)});
+            head.Controls.Add(new Label{Text="手動轉速　1800～5000 RPM",ForeColor=Muted,Location=new Point(icons==null?0:26,2),Size=new Size(320,24)});
+            Panel valueRow=new Panel{Dock=DockStyle.Top,Height=42};
+            speedValue=new Label{Dock=DockStyle.Fill,Font=new Font(Ui.TextFont,19,FontStyle.Bold),ForeColor=Accent,TextAlign=ContentAlignment.MiddleLeft};
+            speedZone=new Label{Dock=DockStyle.Right,Width=150,Font=new Font(Ui.TextFont,9.5f,FontStyle.Bold),ForeColor=Accent,TextAlign=ContentAlignment.MiddleRight};
+            valueRow.Controls.Add(speedValue); valueRow.Controls.Add(speedZone);
+            speedSlider=new ValueSlider{Dock=DockStyle.Top,Minimum=FanLevels.Minimum,Maximum=FanLevels.Maximum,Step=1,Marker=FanLevels.BoostFrom,FillColor=Accent};
+            speedSlider.Value=selectedLevel;
+            speedSlider.ValueChanged+=delegate{selectedLevel=speedSlider.Value;UpdateView(false);};
+            Panel gap=new Panel{Dock=DockStyle.Top,Height=6};
+            TableLayoutPanel presets=Grid(5); presets.Dock=DockStyle.Top; presets.Height=34;
+            int[] levels={18,25,33,42,50};
+            for(int i=0;i<5;i++)
+            {
+                int level=levels[i];
+                DashboardButton preset=new DashboardButton{Kind=ButtonKind.Secondary,Text=FanLevels.Rpm(level).ToString(),Font=new Font(Ui.TextFont,9.5f),Dock=DockStyle.Fill,Margin=new Padding(i==0?0:3,0,i==4?0:3,0)};
+                preset.Click+=delegate{speedSlider.Value=level;selectedLevel=level;UpdateView(false);};
+                presets.Controls.Add(preset,i,0);
+            }
+            speedNote=new Label{Dock=DockStyle.Fill,ForeColor=Muted,Font=new Font(Ui.TextFont,9),Padding=new Padding(0,8,0,0)};
+            applySpeed=new DashboardButton{Kind=ButtonKind.Primary,Text="套用",Glyph="",Font=new Font(Ui.TextFont,10.5f,FontStyle.Bold),Dock=DockStyle.Bottom,Height=42};
+            applySpeed.Click+=async delegate{int level=selectedLevel;if(session!=null)await Run(delegate{session.Enable(level);});};
+            card.Controls.Add(speedNote);card.Controls.Add(applySpeed);card.Controls.Add(presets);card.Controls.Add(gap);card.Controls.Add(speedSlider);card.Controls.Add(valueRow);card.Controls.Add(head);
+            return card;
         }
         Button AutoButton()
         {
@@ -640,7 +685,7 @@ namespace VictusQuiet
         void ShowPage(int index)
         {
             string[] titles={"即時總覽","風扇控制","保護與紀錄","螢幕亮度"};
-            string[] descriptions={"查看即時狀態，快速切換已驗證的安靜模式。","選擇低速或原廠自動管理，查看本輪剩餘時間。","查看恢復條件，以及本次開啟期間的操作紀錄。","調整內建與外接螢幕的亮度，不需要管理員權限。"};
+            string[] descriptions={"查看即時狀態，快速切換安靜、最大散熱或原廠自動。","在 1800～5000 RPM 之間選擇轉速，或交回原廠自動管理。","查看恢復條件，以及本次開啟期間的操作紀錄。","調整內建與外接螢幕的亮度，不需要管理員權限。"};
             for(int i=0;i<4;i++){pages[i].Visible=i==index;navigation[i].Selected=i==index;}
             pages[index].BringToFront();title.Text=titles[index];subtitle.Text=descriptions[index];
             if(index==3 && !displaysLoaded && !preview) { var ignored=ScanDisplays(); }
@@ -696,26 +741,54 @@ namespace VictusQuiet
             finally{busy=false;if(!IsDisposed)UpdateView(true);if(closePending && !IsDisposed){closePending=false;BeginInvoke(new Action(Close));}}
         }
         static string Value(double value){return Double.IsNaN(value)?"—":value.ToString("0");}
-        void Fill(FanSample data,CoolingMode state,int seconds,bool needsRecovery,bool connected)
+        static string ModeName(CoolingMode state,int level)
+        {
+            if(state==CoolingMode.RecoveryFailed)return "恢復待確認";
+            if(state!=CoolingMode.Quiet)return "原有管理方式";
+            if(level==FanLevels.Quiet)return "安靜模式 · 1800 RPM";
+            return (FanLevels.IsBoost(level)?"加強散熱 · ":"低速 · ")+FanLevels.Rpm(level)+" RPM";
+        }
+        // One rule for every speed button: valid readings, no pending recovery, not already running that level,
+        // and low speeds only when the controller would accept them.
+        bool CanApply(int level,FanSample data,CoolingMode state,int current,bool connected)
+        {
+            return !busy && connected && data!=null && data.Valid && state!=CoolingMode.RecoveryFailed
+                && !(state==CoolingMode.Quiet && current==level)
+                && (FanLevels.IsBoost(level) || FanLevels.LowSpeedBlocker(data)==null);
+        }
+        void Fill(FanSample data,CoolingMode state,int level,int seconds,bool timeLimited,bool needsRecovery,bool connected)
         {
             fan1.Text=data==null?"—":(data.Fan1*100).ToString();fan2.Text=data==null?"—":(data.Fan2*100).ToString();
             zone.Text=data==null?"—":Value(data.ZoneC);gpu.Text=data==null?"—":Value(data.GpuC);
             zoneBar.Value=data==null?Double.NaN:data.ZoneC;gpuBar.Value=data==null?Double.NaN:data.GpuC;
             load.Text=data==null?"CPU 負載 —　 GPU 負載 —":"CPU 負載 "+Value(data.CpuLoad)+"%　 GPU 負載 "+Value(data.GpuLoad)+"%";
-            string modeName=state==CoolingMode.Quiet?"安靜模式":state==CoolingMode.RecoveryFailed?"恢復待確認":"原有管理方式";
-            Color modeColor=state==CoolingMode.Quiet?Accent:state==CoolingMode.RecoveryFailed?Ui.Danger:Ink;
+            string modeName=ModeName(state,level);
+            Color modeColor=state==CoolingMode.RecoveryFailed?Ui.Danger:state!=CoolingMode.Quiet?Ink:FanLevels.IsBoost(level)?Ui.Warn:Accent;
             currentMode.Text="目前："+modeName;controlMode.Text=modeName;currentMode.ForeColor=modeColor;controlMode.ForeColor=modeColor;
-            countdown.Text=state==CoolingMode.Quiet?"本輪剩餘 "+TimeSpan.FromSeconds(seconds).ToString(@"m\:ss"):"每次低速最多 5 分鐘";
-            controlTimer.Text=state==CoolingMode.Quiet?"目標約 1800 RPM · "+countdown.Text:"按下安靜模式後才會套用低速。";
-            sessionProgress.Value=Math.Max(0,Math.Min(300,seconds));
+            countdown.Text=state!=CoolingMode.Quiet?"低速每次最多 5 分鐘":timeLimited?"本輪剩餘 "+TimeSpan.FromSeconds(seconds).ToString(@"m\:ss"):"不限時間 · 關閉程式時恢復自動";
+            controlTimer.Text=state==CoolingMode.Quiet?countdown.Text:"選好轉速後按「套用」。";
+            sessionProgress.Value=timeLimited?Math.Max(0,Math.Min(300,seconds)):0;
             connection.Text=connected?"●  已取得管理員權限":"○  尚未取得控制權限";connection.ForeColor=connected?Accent:Muted;admin.Visible=!connected;admin.Enabled=!busy;
-            foreach(Button button in quietButtons)button.Enabled=!busy && connected && !needsRecovery && data!=null && data.Valid;
+            foreach(Button button in quietButtons)button.Enabled=CanApply((int)button.Tag,data,state,level,connected);
             foreach(Button button in autoButtons)button.Enabled=!busy && connected && needsRecovery;
+
+            bool boost=FanLevels.IsBoost(selectedLevel);
+            Color tone=boost?Ui.Warn:Accent;
+            speedValue.Text=FanLevels.Rpm(selectedLevel)+" RPM";speedValue.ForeColor=tone;
+            speedZone.Text=boost?"加強散熱":"低速區";speedZone.ForeColor=tone;speedSlider.FillColor=tone;
+            string blocker=boost?null:FanLevels.LowSpeedBlocker(data);
+            speedNote.ForeColor=Muted;
+            if(!connected)speedNote.Text="取得管理員權限後才能調整風扇。";
+            else if(blocker!=null){speedNote.Text="現在不能低速："+blocker+"可改用 3300 RPM 以上。";speedNote.ForeColor=Ui.Warn;}
+            else speedNote.Text=boost?"風扇只會更快，不受溫度與時間限制；關閉程式時交回原廠自動。":"比原廠安靜；每次最多 5 分鐘，溫度或負載升高會自動恢復。";
+            bool active=state==CoolingMode.Quiet && level==selectedLevel;
+            applySpeed.Text=active?"已套用 "+FanLevels.Rpm(selectedLevel)+" RPM":(state==CoolingMode.Quiet?"改為 ":"套用 ")+FanLevels.Rpm(selectedLevel)+" RPM";
+            applySpeed.Enabled=CanApply(selectedLevel,data,state,level,connected);
         }
         void UpdateView(bool record)
         {
             FanSample data=session==null?null:session.Latest;
-            Fill(data,session==null?CoolingMode.Automatic:session.Mode,session==null?0:session.RemainingSeconds,session!=null && session.NeedsRecovery,Program.IsAdmin());
+            Fill(data,session==null?CoolingMode.Automatic:session.Mode,session==null?0:session.TargetLevel,session==null?0:session.RemainingSeconds,session!=null && session.TimeLimited,session!=null && session.NeedsRecovery,Program.IsAdmin());
             string message=error.Length>0?error:session==null?"取得管理員權限後開始監看；目前未變更風扇。":session.Status;
             status.Text=(busy?"正在處理，請稍候…":message)+"\r\n轉速為 BIOS 等級估計；ACPI 熱區並非 CPU 核心溫度。";
             if(record && data!=null){history.Add(DateTime.UtcNow,data.Fan1*100,data.Fan2*100);refreshed.Text="更新 "+DateTime.Now.ToString("HH:mm:ss");}
@@ -723,14 +796,16 @@ namespace VictusQuiet
         }
         void PaintPreview()
         {
-            bool locked=previewScene=="locked",automatic=previewScene=="auto";
+            bool locked=previewScene=="locked",automatic=previewScene=="auto"||previewScene=="hot";
             FanSample data=locked?null:new FanSample(54,47,12,8,automatic?27:18,automatic?29:18);
-            Fill(data,locked||automatic?CoolingMode.Automatic:CoolingMode.Quiet,locked||automatic?0:272,!locked&&!automatic,!locked);
+            if(previewScene=="boost"){selectedLevel=42;speedSlider.Value=42;data=new FanSample(78,56,38,2,42,42);}
+            if(previewScene=="hot"){selectedLevel=25;speedSlider.Value=25;data=new FanSample(78,56,38,2,28,31);}
+            Fill(data,locked||automatic?CoolingMode.Automatic:CoolingMode.Quiet,locked||automatic?0:previewScene=="boost"?42:18,locked||automatic||previewScene=="boost"?0:272,!locked&&!automatic&&previewScene!="boost",!locked&&!automatic,!locked);
             if(!locked)for(int i=0;i<=60;i++)history.Add(DateTime.UtcNow.AddSeconds(-120+2*i),(int)(i<38?2850+Math.Sin(i*.35)*130:1800+Math.Sin(i)*45),(int)(i<38?3000+Math.Cos(i*.32)*110:1800+Math.Cos(i)*45));
             refreshed.Text=locked?"等待連線":"更新 "+DateTime.Now.ToString("HH:mm:ss");
             status.Text="介面預覽 · 範例讀值，未控制風扇。\r\n轉速為 BIOS 等級估計；ACPI 熱區並非 CPU 核心溫度。";
             Log("控制面板已開啟。");if(!locked){Log("管理員連線完成，開始監看。");Log("啟用安靜模式，目標約 1800 RPM。");}
-            if(previewScene=="controls")ShowPage(1);if(previewScene=="protection")ShowPage(2);
+            if(previewScene=="controls"||previewScene=="boost"||previewScene=="hot")ShowPage(1);if(previewScene=="protection")ShowPage(2);
             if(previewScene=="display")
             {
                 ShowDisplays(new List<DisplayTarget>{new PreviewDisplay("內建螢幕","筆電面板 · Windows 亮度",true,100),new PreviewDisplay("VZ249HG","外接螢幕 · DDC/CI",false,65)});

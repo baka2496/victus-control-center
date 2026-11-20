@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.ComponentModel;
 using System.Diagnostics;
 using System.Drawing;
@@ -64,9 +65,70 @@ namespace VictusQuiet
                 }
             }
         }
+        // Short real-hardware check of adjustable speeds: 4200 and 5000 RPM always (they only add cooling),
+        // 2500 RPM only when cool and idle. Restores automatic cooling at the end in every case.
+        static int VerifyLevels(string path)
+        {
+            using (StreamWriter log = new StreamWriter(path, false, new UTF8Encoding(true)))
+            {
+                log.AutoFlush = true;
+                log.WriteLine("Victus 控制中心 可調轉速驗證 " + DateTimeOffset.Now.ToString("o"));
+                if (!IsAdmin()) { log.WriteLine("ERROR: administrator privileges required"); return 2; }
+                int failures = 0;
+                using (HpQuietDevice device = new HpQuietDevice())
+                using (ProcessRecoveryGuard guard = new ProcessRecoveryGuard())
+                {
+                    QuietSession session = new QuietSession(device, guard, () => HpQuietDevice.Seconds);
+                    try
+                    {
+                        Thread.Sleep(2000); session.Poll();
+                        FanSample start = session.Latest;
+                        log.WriteLine("Start fans=" + (start == null ? "unknown" : start.Fan1 + "/" + start.Fan2) + " zone=" + (start == null ? "?" : start.ZoneC.ToString("0.0")) + " gpu=" + (start == null ? "?" : start.GpuC.ToString("0")));
+                        List<int> levels = new List<int> { 42, 50 };
+                        if (FanLevels.LowSpeedBlocker(start) == null) levels.Add(25); else log.WriteLine("SKIP 2500 RPM: " + FanLevels.LowSpeedBlocker(start));
+                        foreach (int level in levels)
+                        {
+                            session.Enable(level);
+                            bool reached = false; FanSample sample = null;
+                            for (int i = 0; i < 8 && session.Mode == CoolingMode.Quiet; i++)
+                            {
+                                Thread.Sleep(2000); session.Poll(); sample = session.Latest;
+                                if (sample == null) continue;
+                                bool ok = FanLevels.IsBoost(level) ? sample.Fan1 >= level - 5 && sample.Fan2 >= level - 5
+                                    : Math.Abs(sample.Fan1 - level) <= 3 && Math.Abs(sample.Fan2 - level) <= 3;
+                                if (ok) { reached = true; break; }
+                            }
+                            log.WriteLine((reached ? "PASS " : "FAIL ") + FanLevels.Rpm(level) + " RPM -> fans " + (sample == null ? "unknown" : FanLevels.Rpm(sample.Fan1) + "/" + FanLevels.Rpm(sample.Fan2)) + " mode=" + session.Mode + " status=" + session.Status);
+                            if (!reached) failures++;
+                            if (session.Mode != CoolingMode.Quiet) break;
+                        }
+                    }
+                    catch (Exception error) { log.WriteLine("ERROR: " + error.Message); failures++; }
+                    finally
+                    {
+                        try { session.Restore("驗證結束，已恢復自動散熱。"); log.WriteLine("RESTORED: NeedsRecovery=" + session.NeedsRecovery); }
+                        catch (Exception error) { log.WriteLine("RESTORATION ERROR; independent recovery remains armed: " + error.Message); failures++; }
+                    }
+                }
+                log.WriteLine(failures == 0 ? "ALL PASS" : failures + " FAILURE(S)");
+                return failures == 0 ? 0 : 1;
+            }
+        }
         [STAThread]
         static int Main(string[] args)
         {
+            if (args.Length == 2 && args[0] == "--verify-levels")
+            {
+                bool owns = false;
+                using (Mutex control = new Mutex(false, @"Local\VictusQuiet-88F8-Control"))
+                {
+                    try { try { owns = control.WaitOne(0); } catch (AbandonedMutexException) { owns = true; }
+                        if (!owns) { File.WriteAllText(args[1], "Another control instance is running; close the panel first"); return 2; }
+                        return VerifyLevels(args[1]);
+                    }
+                    finally { if (owns) control.ReleaseMutex(); }
+                }
+            }
             if (args.Length == 3 && args[0] == "--rescue") { int parent; return Int32.TryParse(args[2], out parent) ? ProcessRecoveryGuard.Watch(args[1], parent) : 2; }
             if (args.Length == 2 && args[0] == "--guard-check")
             {
@@ -86,7 +148,7 @@ namespace VictusQuiet
                 }
             }
             Application.EnableVisualStyles(); Application.SetCompatibleTextRenderingDefault(false);
-            bool render = args.Length == 2 && (args[0] == "--render" || args[0] == "--render-auto" || args[0] == "--render-locked" || args[0] == "--render-controls" || args[0] == "--render-protection" || args[0] == "--render-display");
+            bool render = args.Length == 2 && (args[0] == "--render" || args[0] == "--render-auto" || args[0] == "--render-locked" || args[0] == "--render-controls" || args[0] == "--render-protection" || args[0] == "--render-display" || args[0] == "--render-boost" || args[0] == "--render-hot");
             string scene = render && args[0] != "--render" ? args[0].Substring(9) : "quiet";
             using (QuietWindow window = new QuietWindow(render, scene))
             {
