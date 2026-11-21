@@ -42,14 +42,34 @@ namespace VictusQuiet
         public const int LowSpeedSeconds = 300;
         public static bool IsBoost(int level) { return level >= BoostFrom; }
         public static int Rpm(int level) { return level * 100; }
+
+        // Quiet curve: while a low speed runs, warmth raises the fans a little instead of handing the whole
+        // machine back to the louder firmware control. Only these hard limits end low speed for temperature.
+        public const int HandBackZone = 75, HandBackGpu = 70;
+        // Starting (and renewing a five-minute round) needs a little margin below the hard limits.
+        public const int StartZone = 72, StartGpu = 67, StartCpu = 35, StartGpuLoad = 30;
+        // The quiet curve never goes above this; faster than that is boost territory.
+        public const int LowCeiling = 32;
+        // Level that sustained CPU work raises a low speed to.
+        public const int BusyFloor = 29;
+        // Lowest level the temperature allows right now (0 = no floor). GPU counts 5°C hotter than ACPI.
+        public static int CurveFloor(double zone, double gpu)
+        {
+            double t = Math.Max(zone, gpu + 5);
+            if (t >= 72) return 32;
+            if (t >= 68) return 29;
+            if (t >= 64) return 26;
+            if (t >= 60) return 22;
+            return 0;
+        }
         // Why a low-speed level cannot start now, or null when it can.
         public static string LowSpeedBlocker(FanSample sample)
         {
             if (sample == null || !sample.Valid) return "溫度或負載資料尚未就緒。";
-            if (sample.ZoneC >= 60) return "ACPI 熱區 " + sample.ZoneC.ToString("0") + "°C，需低於 60°C。";
-            if (sample.GpuC >= 55) return "GPU " + sample.GpuC.ToString("0") + "°C，需低於 55°C。";
-            if (sample.CpuLoad > 25) return "CPU 負載 " + sample.CpuLoad.ToString("0") + "%，需不超過 25%。";
-            if (sample.GpuLoad > 30) return "GPU 負載 " + sample.GpuLoad.ToString("0") + "%，需不超過 30%。";
+            if (sample.ZoneC >= StartZone) return "ACPI 熱區 " + sample.ZoneC.ToString("0") + "°C，需低於 " + StartZone + "°C。";
+            if (sample.GpuC >= StartGpu) return "GPU " + sample.GpuC.ToString("0") + "°C，需低於 " + StartGpu + "°C。";
+            if (sample.CpuLoad > StartCpu) return "CPU 負載 " + sample.CpuLoad.ToString("0") + "%，需不超過 " + StartCpu + "%。";
+            if (sample.GpuLoad > StartGpuLoad) return "GPU 負載 " + sample.GpuLoad.ToString("0") + "%，需不超過 " + StartGpuLoad + "%。";
             return null;
         }
     }
@@ -59,7 +79,11 @@ namespace VictusQuiet
         readonly IQuietDevice device;
         readonly IRecoveryGuard recovery;
         readonly Func<double> seconds;
-        double began, lastWrite, busySince = -1;
+        double began, lastWrite, levelSince, busySince = -1, calmSince = -1;
+        bool busyHeld;
+        int thermalFloor;
+        // Level actually written to the fans: TargetLevel, raised by the quiet curve when warm or busy.
+        public int Level { get; private set; }
         public CoolingMode Mode { get; private set; }
         public bool NeedsRecovery { get; private set; }
         public FanSample Latest { get; private set; }
@@ -98,12 +122,16 @@ namespace VictusQuiet
                 if (!changing) { recovery.Begin(); NeedsRecovery = true; }
                 // Re-arming restarts the guard's clock, so switching levels starts a fresh low-speed round.
                 recovery.Arm(boost ? 0 : FanLevels.LowSpeedSeconds + 7);
-                device.ApplyLevel(level);
-                TargetLevel = level; Mode = CoolingMode.Quiet; Round = 1;
-                began = lastWrite = seconds(); busySince = -1;
+                int floor = boost ? 0 : FanLevels.CurveFloor(Latest.ZoneC, Latest.GpuC);
+                int write = boost ? level : Math.Min(FanLevels.LowCeiling, Math.Max(level, floor));
+                device.ApplyLevel(write);
+                TargetLevel = level; Level = write; thermalFloor = floor; Mode = CoolingMode.Quiet; Round = 1;
+                began = lastWrite = levelSince = seconds(); busySince = calmSince = -1; busyHeld = false;
                 Status = boost
                     ? "加強散熱已送出，風扇將升到約 " + FanLevels.Rpm(level) + " RPM；不限時間。"
-                    : "低速已送出，風扇將逐步降至約 " + FanLevels.Rpm(level) + " RPM；每 5 分鐘檢查一次，條件符合就繼續。";
+                    : write > level
+                        ? "低速已送出；目前溫度偏高，先用約 " + FanLevels.Rpm(write) + " RPM，降溫後會自動降到 " + FanLevels.Rpm(level) + " RPM。"
+                        : "低速已送出，風扇將逐步降至約 " + FanLevels.Rpm(level) + " RPM；升溫時會小幅加速，不會直接切回原廠。";
             }
             catch (Exception error)
             {
@@ -114,12 +142,12 @@ namespace VictusQuiet
 
         public void Restore(string reason)
         {
-            if (!NeedsRecovery) { Mode = CoolingMode.Automatic; TargetLevel = 0; Status = reason; return; }
+            if (!NeedsRecovery) { Mode = CoolingMode.Automatic; TargetLevel = 0; Level = 0; Status = reason; return; }
             try
             {
                 device.RestoreAutomatic();
                 NeedsRecovery = false;
-                Mode = CoolingMode.Automatic; TargetLevel = 0;
+                Mode = CoolingMode.Automatic; TargetLevel = 0; Level = 0;
                 recovery.Complete();
                 Status = reason;
             }
@@ -139,7 +167,7 @@ namespace VictusQuiet
             if (externalRestore)
             {
                 NeedsRecovery = false;
-                Mode = CoolingMode.Automatic; TargetLevel = 0;
+                Mode = CoolingMode.Automatic; TargetLevel = 0; Level = 0;
                 recovery.Complete();
                 Status = "備援程序已恢復自動散熱；手動轉速已結束。";
             }
@@ -157,9 +185,12 @@ namespace VictusQuiet
             bool boost = FanLevels.IsBoost(TargetLevel);
             if (!boost)
             {
-                if (Latest.ZoneC >= 60 || Latest.GpuC >= 55)
-                { Restore("溫度升高，已恢復自動散熱。"); return; }
-                if (seconds() - began >= FanLevels.LowSpeedSeconds)
+                double now = seconds();
+                if (Latest.ZoneC >= FanLevels.HandBackZone || Latest.GpuC >= FanLevels.HandBackGpu)
+                { Restore("溫度達 ACPI " + Latest.ZoneC.ToString("0") + "°C／GPU " + Latest.GpuC.ToString("0") + "°C（上限 " + FanLevels.HandBackZone + "／" + FanLevels.HandBackGpu + "°C），已恢復自動散熱。"); return; }
+                if (Latest.CpuLoad >= 70 || Latest.GpuLoad >= 50)
+                { Restore("運算負載升高（CPU " + Latest.CpuLoad.ToString("0") + "%／GPU " + Latest.GpuLoad.ToString("0") + "%），已恢復自動散熱。"); return; }
+                if (now - began >= FanLevels.LowSpeedSeconds)
                 {
                     // End of a five-minute round: keep going only if the start conditions still hold.
                     string blocker = FanLevels.LowSpeedBlocker(Latest);
@@ -167,30 +198,51 @@ namespace VictusQuiet
                     try
                     {
                         recovery.Arm(FanLevels.LowSpeedSeconds + 7);
-                        device.ApplyLevel(TargetLevel);
-                        began = lastWrite = seconds(); busySince = -1; Round++;
-                        Status = "溫度與負載仍正常，已自動續轉第 " + Round + " 輪（約 " + FanLevels.Rpm(TargetLevel) + " RPM）。";
+                        device.ApplyLevel(Level);
+                        began = lastWrite = now; Round++;
+                        Status = "溫度與負載仍正常，已自動續轉第 " + Round + " 輪（約 " + FanLevels.Rpm(Level) + " RPM）。";
                     }
                     catch (Exception) { Restore("續轉失敗，已恢復自動散熱。"); }
                     return;
                 }
-                if (Latest.CpuLoad >= 70 || Latest.GpuLoad >= 50)
-                { Restore("運算負載升高，已恢復自動散熱。"); return; }
+                // Sustained CPU work raises the speed instead of ending it; it drops back after 10 calm seconds.
                 if (Latest.CpuLoad >= 35)
                 {
-                    if (busySince < 0) busySince = seconds();
-                    if (seconds() - busySince >= 4)
-                    { Restore("CPU 持續忙碌，已恢復自動散熱。"); return; }
+                    calmSince = -1;
+                    if (busySince < 0) busySince = now;
+                    if (now - busySince >= 4) busyHeld = true;
                 }
-                else busySince = -1;
-                if (seconds() - began >= 15 && (Latest.Fan1 < TargetLevel - 3 || Latest.Fan2 < TargetLevel - 3 || Latest.Fan1 > TargetLevel + 3 || Latest.Fan2 > TargetLevel + 3))
-                { Restore("韌體未維持低速範圍，已恢復自動散熱。"); return; }
+                else
+                {
+                    busySince = -1;
+                    if (calmSince < 0) calmSince = now;
+                    if (now - calmSince >= 10) busyHeld = false;
+                }
+                // Quiet curve with 3°C hysteresis: rise at once, come down only when clearly cooler.
+                int rising = FanLevels.CurveFloor(Latest.ZoneC, Latest.GpuC);
+                if (rising >= thermalFloor) thermalFloor = rising;
+                else thermalFloor = Math.Min(thermalFloor, FanLevels.CurveFloor(Latest.ZoneC + 3, Latest.GpuC + 3));
+                int want = Math.Min(FanLevels.LowCeiling, Math.Max(TargetLevel, Math.Max(thermalFloor, busyHeld ? FanLevels.BusyFloor : 0)));
+                if (want != Level)
+                {
+                    try
+                    {
+                        device.ApplyLevel(want);
+                        string why = want <= Level ? "已降溫或負載降低，降回約 "
+                            : (thermalFloor >= want ? "溫度升到 ACPI " + Latest.ZoneC.ToString("0") + "°C／GPU " + Latest.GpuC.ToString("0") + "°C" : "CPU 持續忙碌") + "，小幅加速到約 ";
+                        Level = want; levelSince = lastWrite = now;
+                        Status = why + FanLevels.Rpm(want) + " RPM（仍比原廠安靜）。";
+                    }
+                    catch (Exception) { Restore("調整轉速失敗，已恢復自動散熱。"); return; }
+                }
+                else if (now - levelSince >= 20 && (Latest.Fan1 < Level - 3 || Latest.Fan2 < Level - 3 || Latest.Fan1 > Level + 3 || Latest.Fan2 > Level + 3))
+                { Restore("韌體未維持設定轉速（風扇 " + FanLevels.Rpm(Latest.Fan1) + "／" + FanLevels.Rpm(Latest.Fan2) + "，設定 " + FanLevels.Rpm(Level) + "），已恢復自動散熱。"); return; }
             }
             else if (seconds() - began >= 15 &&(Latest.Fan1 < TargetLevel - 5 || Latest.Fan2 < TargetLevel - 5))
             { Restore("風扇沒有升到目標轉速，已恢復自動散熱。"); return; }
             try
             {
-                if (seconds() - lastWrite >= 30) { device.ApplyLevel(TargetLevel); lastWrite = seconds(); }
+                if (seconds() - lastWrite >= 30) { device.ApplyLevel(Level); lastWrite = seconds(); }
                 recovery.Pulse();
             }
             catch (Exception) { Restore("手動轉速中斷，已恢復自動散熱。"); }

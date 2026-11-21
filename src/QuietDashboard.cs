@@ -393,6 +393,8 @@ namespace VictusQuiet
         static readonly Color Canvas = Ui.Canvas, Surface = Ui.Surface, Muted = Ui.Muted, Ink = Ui.Ink, Accent = Ui.Accent;
         readonly bool preview;
         readonly string previewScene;
+        int previewRunning;
+        static readonly string logFile=System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),"VictusControlCenter","紀錄.txt");
         readonly Panel[] pages = new Panel[4];
         readonly DashboardButton[] navigation = new DashboardButton[4];
         readonly List<DisplayTarget> displays = new List<DisplayTarget>();
@@ -494,10 +496,10 @@ namespace VictusQuiet
             TableLayoutPanel cards = Grid(4); cards.Dock=DockStyle.Top; cards.Height=126;
             fan1=Metric(cards,0,"風扇 1","RPM · 估計",Accent,null,null);
             fan2=Metric(cards,1,"風扇 2","RPM · 估計",Ui.Violet,null,null);
-            zoneBar=new MeterBar { Maximum=60, ThresholdColours=true };
-            gpuBar=new MeterBar { Maximum=55, ThresholdColours=true };
-            zone=Metric(cards,2,"ACPI 熱區","°C · 非核心溫度",Ink,zoneBar,"60°C 恢復");
-            gpu=Metric(cards,3,"GPU 溫度","°C · NVIDIA",Ink,gpuBar,"55°C 恢復");
+            zoneBar=new MeterBar { Maximum=FanLevels.HandBackZone, ThresholdColours=true };
+            gpuBar=new MeterBar { Maximum=FanLevels.HandBackGpu, ThresholdColours=true };
+            zone=Metric(cards,2,"ACPI 熱區","°C · 非核心溫度",Ink,zoneBar,"75°C 恢復");
+            gpu=Metric(cards,3,"GPU 溫度","°C · NVIDIA",Ink,gpuBar,"70°C 恢復");
             Panel summary = new Panel { Dock=DockStyle.Top, Height=40 };
             load=LabelAt("CPU 負載 —　 GPU 負載 —",2,14,470,24,10,Muted);
             refreshed=LabelAt("等待連線",0,14,200,24,9,Ui.Faint); refreshed.TextAlign=ContentAlignment.MiddleRight;
@@ -532,7 +534,7 @@ namespace VictusQuiet
             Panel conditionHost=new Panel { Dock=DockStyle.Fill,Padding=new Padding(0,14,0,0) };
             RoundPanel conditions=new RoundPanel { Dock=DockStyle.Fill,Padding=new Padding(20,12,20,12) };
             TableLayoutPanel chips=Grid(4); chips.Dock=DockStyle.Top; chips.Height=58;
-            string[,] rules={{"ACPI 熱區","低於 60°C"},{"GPU 溫度","低於 55°C"},{"CPU 負載","不超過 25%"},{"GPU 負載","不超過 30%"}};
+            string[,] rules={{"ACPI 熱區","低於 72°C"},{"GPU 溫度","低於 67°C"},{"CPU 負載","不超過 35%"},{"GPU 負載","不超過 30%"}};
             for(int i=0;i<4;i++) chips.Controls.Add(Chip(rules[i,0],rules[i,1],i),i,0);
             conditions.Controls.Add(chips);
             conditions.Controls.Add(new Label { Text="低速（3300 RPM 以下）的啟用條件　·　3300 RPM 以上不受限制",Dock=DockStyle.Top,Height=28,ForeColor=Ink,Font=new Font(Ui.TextFont,10.5f,FontStyle.Bold) });
@@ -542,8 +544,8 @@ namespace VictusQuiet
             // Protection details and a session-only activity log.
             TableLayoutPanel protection=Grid(2); protection.Dock=DockStyle.Fill;
             RoundPanel rulesCard=new RoundPanel { Dock=DockStyle.Fill,Margin=new Padding(0,0,7,0),Padding=new Padding(22,18,20,18) };
-            string[] restore={"ACPI 熱區達 60°C","GPU 溫度達 55°C","運算負載升高","溫度或風扇讀值失效","每 5 分鐘檢查時已不符合啟用條件","正常關閉程式"};
-            Label backup=new Label { Dock=DockStyle.Bottom,Height=76,ForeColor=Accent,Text="以上條件只適用 3300 RPM 以下的低速；3300 RPM 以上的加強散熱只會在讀值失效或風扇沒升上去時恢復。\r\n另有獨立備援程序，在主程式中斷時嘗試恢復散熱。",TextAlign=ContentAlignment.MiddleLeft,Font=new Font(Ui.TextFont,9.5f) };
+            string[] restore={"ACPI 熱區達 75°C","GPU 溫度達 70°C","CPU 負載達 70% 或 GPU 負載達 50%","溫度或風扇讀值失效","每 5 分鐘檢查時已不符合啟用條件","正常關閉程式"};
+            Label backup=new Label { Dock=DockStyle.Bottom,Height=76,ForeColor=Accent,Text="還沒到上限時不會切回原廠：升溫或 CPU 持續忙碌時先小幅加速（2200～3200 RPM），降溫後自動降回。\r\n以上只適用 3300 RPM 以下；加強散熱只在讀值失效或風扇沒升上去時恢復。另有獨立備援程序。",TextAlign=ContentAlignment.MiddleLeft,Font=new Font(Ui.TextFont,9.5f) };
             backup.Dock=DockStyle.Top; rulesCard.Controls.Add(backup);
             for(int i=restore.Length-1;i>=0;i--) rulesCard.Controls.Add(RuleRow(restore[i]));
             rulesCard.Controls.Add(CardTitle("","自動恢復條件"));
@@ -732,6 +734,9 @@ namespace VictusQuiet
         void Log(string message)
         {
             events.Add(DateTime.Now.ToString("HH:mm:ss")+"   "+message);if(events.Count>120)events.RemoveAt(0);
+            // Keep a copy on disk so the reason a mode ended can be checked after the panel is closed.
+            if(!preview)try{System.IO.Directory.CreateDirectory(System.IO.Path.GetDirectoryName(logFile));FanSample s=session==null?null:session.Latest;
+                System.IO.File.AppendAllText(logFile,DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss")+"  "+message+(s==null?"":"  [ACPI "+Value(s.ZoneC)+"°C GPU "+Value(s.GpuC)+"°C CPU "+Value(s.CpuLoad)+"% GPU負載 "+Value(s.GpuLoad)+"% 風扇 "+s.Fan1*100+"/"+s.Fan2*100+"]")+Environment.NewLine,System.Text.Encoding.UTF8);}catch(Exception){}
             eventLog.Text=String.Join(Environment.NewLine+Environment.NewLine,events.ToArray());eventLog.SelectionStart=eventLog.TextLength;eventLog.ScrollToCaret();
         }
         async Task Run(Action action,bool clearError=true)
@@ -741,12 +746,12 @@ namespace VictusQuiet
             finally{busy=false;if(!IsDisposed)UpdateView(true);if(closePending && !IsDisposed){closePending=false;BeginInvoke(new Action(Close));}}
         }
         static string Value(double value){return Double.IsNaN(value)?"—":value.ToString("0");}
-        static string ModeName(CoolingMode state,int level)
+        static string ModeName(CoolingMode state,int level,int running)
         {
             if(state==CoolingMode.RecoveryFailed)return "恢復待確認";
             if(state!=CoolingMode.Quiet)return "原有管理方式";
-            if(level==FanLevels.Quiet)return "安靜模式 · 1800 RPM";
-            return (FanLevels.IsBoost(level)?"加強散熱 · ":"低速 · ")+FanLevels.Rpm(level)+" RPM";
+            string name=level==FanLevels.Quiet?"安靜模式 · 1800 RPM":(FanLevels.IsBoost(level)?"加強散熱 · ":"低速 · ")+FanLevels.Rpm(level)+" RPM";
+            return running>level?name+"（升溫中，暫時 "+FanLevels.Rpm(running)+"）":name;
         }
         // One rule for every speed button: valid readings, no pending recovery, not already running that level,
         // and low speeds only when the controller would accept them.
@@ -762,7 +767,8 @@ namespace VictusQuiet
             zone.Text=data==null?"—":Value(data.ZoneC);gpu.Text=data==null?"—":Value(data.GpuC);
             zoneBar.Value=data==null?Double.NaN:data.ZoneC;gpuBar.Value=data==null?Double.NaN:data.GpuC;
             load.Text=data==null?"CPU 負載 —　 GPU 負載 —":"CPU 負載 "+Value(data.CpuLoad)+"%　 GPU 負載 "+Value(data.GpuLoad)+"%";
-            string modeName=ModeName(state,level);
+            int running=previewRunning>0?previewRunning:session!=null && session.Mode==CoolingMode.Quiet?session.Level:level;
+            string modeName=ModeName(state,level,running);
             Color modeColor=state==CoolingMode.RecoveryFailed?Ui.Danger:state!=CoolingMode.Quiet?Ink:FanLevels.IsBoost(level)?Ui.Warn:Accent;
             currentMode.Text="目前："+modeName;controlMode.Text=modeName;currentMode.ForeColor=modeColor;controlMode.ForeColor=modeColor;
             int round=session==null?1:Math.Max(1,session.Round);
@@ -781,7 +787,7 @@ namespace VictusQuiet
             speedNote.ForeColor=Muted;
             if(!connected)speedNote.Text="取得管理員權限後才能調整風扇。";
             else if(blocker!=null){speedNote.Text="現在不能低速："+blocker+"可改用 3300 RPM 以上。";speedNote.ForeColor=Ui.Warn;}
-            else speedNote.Text=boost?"風扇只會更快，不受溫度與時間限制；關閉程式時交回原廠自動。":"比原廠安靜；每 5 分鐘檢查，條件符合就一直續轉，溫度或負載升高會立刻恢復。";
+            else speedNote.Text=boost?"風扇只會更快，不受溫度與時間限制；關閉程式時交回原廠自動。":"比原廠安靜；升溫時小幅加速，到 75°C 才交回原廠；每 5 分鐘檢查，符合就續轉。";
             bool active=state==CoolingMode.Quiet && level==selectedLevel;
             applySpeed.Text=active?"已套用 "+FanLevels.Rpm(selectedLevel)+" RPM":(state==CoolingMode.Quiet?"改為 ":"套用 ")+FanLevels.Rpm(selectedLevel)+" RPM";
             applySpeed.Enabled=CanApply(selectedLevel,data,state,level,connected);
@@ -800,6 +806,7 @@ namespace VictusQuiet
             bool locked=previewScene=="locked",automatic=previewScene=="auto"||previewScene=="hot";
             FanSample data=locked?null:new FanSample(54,47,12,8,automatic?27:18,automatic?29:18);
             if(previewScene=="boost"){selectedLevel=42;speedSlider.Value=42;data=new FanSample(78,56,38,2,42,42);}
+            if(previewScene=="curve"){data=new FanSample(66,52,14,6,26,26);previewRunning=26;}
             if(previewScene=="hot"){selectedLevel=25;speedSlider.Value=25;data=new FanSample(78,56,38,2,28,31);}
             Fill(data,locked||automatic?CoolingMode.Automatic:CoolingMode.Quiet,locked||automatic?0:previewScene=="boost"?42:18,locked||automatic||previewScene=="boost"?0:272,!locked&&!automatic&&previewScene!="boost",!locked&&!automatic,!locked);
             if(!locked)for(int i=0;i<=60;i++)history.Add(DateTime.UtcNow.AddSeconds(-120+2*i),(int)(i<38?2850+Math.Sin(i*.35)*130:1800+Math.Sin(i)*45),(int)(i<38?3000+Math.Cos(i*.32)*110:1800+Math.Cos(i)*45));

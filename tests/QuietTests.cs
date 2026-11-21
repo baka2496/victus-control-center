@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using VictusQuiet;
 
 sealed class FirmwareSimulator : IQuietDevice
@@ -51,15 +51,42 @@ static class QuietTests
             device = new FirmwareSimulator();
             session = new QuietSession(device, new RecoverySimulator(), () => 0);
             session.Enable();
-            device.Sample = new FanSample(60, 47, 10, 8, 18, 18);
+            device.Sample = new FanSample(75, 47, 10, 8, 18, 18);
             session.Poll();
-            if (device.QuietApplied || session.NeedsRecovery) throw new Exception("A hot thermal zone must restore automatic cooling");
-            Console.WriteLine("PASS: rising temperature restores automatic cooling");
+            if (device.QuietApplied || session.NeedsRecovery) throw new Exception("A thermal zone at the hard limit must restore automatic cooling");
+            device = new FirmwareSimulator();
+            session = new QuietSession(device, new RecoverySimulator(), () => 0);
+            session.Enable(); device.Sample = new FanSample(54, 70, 10, 8, 18, 18); session.Poll();
+            if (session.NeedsRecovery) throw new Exception("A GPU at the hard limit must restore automatic cooling");
+            Console.WriteLine("PASS: ACPI 75°C or GPU 70°C restores automatic cooling");
             double clock = 0;
             device = new FirmwareSimulator();
             session = new QuietSession(device, new RecoverySimulator(), () => clock);
             session.Enable();
-            device.Sample = new FanSample(54, 47, 30, 8, 18, 18);
+            clock = 30; device.Sample = new FanSample(61, 47, 10, 8, 18, 18); session.Poll();
+            if (!session.NeedsRecovery || device.AppliedLevel != 22 || session.Level != 22) throw new Exception("Warmth must raise the fans a little, not end low speed");
+            clock = 40; device.Sample = new FanSample(66, 47, 10, 8, 22, 22); session.Poll();
+            if (device.AppliedLevel != 26) throw new Exception("More warmth must step the curve up");
+            clock = 50; device.Sample = new FanSample(63, 47, 10, 8, 26, 26); session.Poll();
+            if (device.AppliedLevel != 26) throw new Exception("The curve must not drop until clearly cooler (hysteresis)");
+            clock = 60; device.Sample = new FanSample(58, 47, 10, 8, 26, 26); session.Poll();
+            if (device.AppliedLevel != 22) throw new Exception("Cooling down must step back one band at a time");
+            clock = 65; device.Sample = new FanSample(56, 47, 10, 8, 22, 22); session.Poll();
+            if (device.AppliedLevel != 18 || session.Level != 18) throw new Exception("Cooling down must return to the chosen low speed");
+            clock = 70; device.Sample = new FanSample(74, 47, 10, 8, 18, 18); session.Poll();
+            if (device.AppliedLevel != FanLevels.LowCeiling || !session.NeedsRecovery) throw new Exception("The curve must cap below boost");
+            Console.WriteLine("PASS: warmth steps the fans up 2200/2600/3200 with hysteresis instead of ending low speed");
+            clock = 0; device = new FirmwareSimulator(); device.Sample = new FanSample(66, 47, 10, 8, 26, 26);
+            session = new QuietSession(device, new RecoverySimulator(), () => clock);
+            session.Enable();
+            if (device.AppliedLevel != 26 || session.TargetLevel != 18) throw new Exception("Starting warm must begin at the curve level");
+            MustReject(() => new QuietSession(new FirmwareSimulator { Sample = new FanSample(72, 47, 10, 8, 18, 18) }, new RecoverySimulator(), () => 0).Enable());
+            Console.WriteLine("PASS: quiet mode can start at 66°C (at 2600 RPM) but not at 72°C");
+            clock = 0;
+            device = new FirmwareSimulator();
+            session = new QuietSession(device, new RecoverySimulator(), () => clock);
+            session.Enable();
+            device.Sample = new FanSample(54, 47, 40, 8, 18, 18);
             clock = 301;
             session.Poll();
             if (device.QuietApplied || session.NeedsRecovery) throw new Exception("A round ending while busier than the start rule must restore automatic cooling");
@@ -72,7 +99,7 @@ static class QuietTests
                 throw new Exception("A cool, idle machine must renew low speed and re-arm the guard");
             clock = 602; session.Poll();
             if (session.Round != 3 || !session.NeedsRecovery) throw new Exception("Low speed must keep renewing while conditions hold");
-            device.Sample = new FanSample(61, 47, 10, 8, 18, 18); clock = 610; session.Poll();
+            device.Sample = new FanSample(76, 47, 10, 8, 18, 18); clock = 610; session.Poll();
             if (session.NeedsRecovery) throw new Exception("Heat must still end a renewed round immediately");
             Console.WriteLine("PASS: cool and idle renews low speed every five minutes; heat still ends it at once");
             device = new FirmwareSimulator();
@@ -110,14 +137,21 @@ static class QuietTests
             device.Sample = new FanSample(54, 47, 40, 8, 18, 18);
             clock = 1; session.Poll();
             clock = 5; session.Poll();
-            if (device.QuietApplied || session.NeedsRecovery) throw new Exception("Sustained CPU work must end low speed");
-            Console.WriteLine("PASS: sustained CPU load ends low speed");
+            if (!session.NeedsRecovery || device.AppliedLevel != FanLevels.BusyFloor) throw new Exception("Sustained CPU work must raise the fans, not end low speed");
+            device.Sample = new FanSample(54, 47, 10, 8, 29, 29);
+            clock = 8; session.Poll();
+            if (device.AppliedLevel != FanLevels.BusyFloor) throw new Exception("A short calm moment must not drop the busy speed");
+            clock = 19; session.Poll();
+            if (device.AppliedLevel != 18) throw new Exception("Ten calm seconds must return to the chosen low speed");
+            Console.WriteLine("PASS: sustained CPU load raises to 2900 RPM and drops back after 10 calm seconds");
             clock = 0;
             device = new FirmwareSimulator();
             session = new QuietSession(device, new RecoverySimulator(), () => clock);
             session.Enable();
             device.Sample = new FanSample(54, 47, 10, 8, 0, 0);
             clock = 16; session.Poll();
+            if (!session.NeedsRecovery) throw new Exception("Fans must get 20 seconds to settle");
+            clock = 21; session.Poll();
             if (device.QuietApplied || session.NeedsRecovery) throw new Exception("Unresponsive fans must end low speed");
             Console.WriteLine("PASS: stalled or overridden fans end low speed");
 
@@ -148,7 +182,7 @@ static class QuietTests
             session = new QuietSession(device, recovery, () => clock);
             session.Enable(25);
             if (recovery.Limit != 307 || !session.TimeLimited) throw new Exception("Low speed must arm the timed guard");
-            device.Sample = new FanSample(61, 47, 10, 8, 25, 25); clock = 5; session.Poll();
+            device.Sample = new FanSample(76, 47, 10, 8, 25, 25); clock = 5; session.Poll();
             if (session.NeedsRecovery) throw new Exception("Heat must end a 2500 RPM low speed");
             Console.WriteLine("PASS: 2500 RPM keeps the low-speed protections");
 
