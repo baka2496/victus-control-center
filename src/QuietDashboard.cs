@@ -505,7 +505,7 @@ namespace VictusQuiet
             RoundPanel actions = new RoundPanel { Dock=DockStyle.Bottom, Height=114, Padding=new Padding(18,12,18,16) };
             Panel actionRow = new Panel { Dock=DockStyle.Top, Height=34 };
             currentMode=LabelAt("目前：原有管理方式",0,2,480,28,11,Ink); currentMode.Font=new Font(Ui.TextFont,11,FontStyle.Bold);
-            countdown=LabelAt("每次低速最多 5 分鐘",0,4,260,26,9,Muted); countdown.TextAlign=ContentAlignment.MiddleRight;
+            countdown=LabelAt("低速每 5 分鐘檢查一次",0,4,260,26,9,Muted); countdown.TextAlign=ContentAlignment.MiddleRight;
             actionRow.Controls.AddRange(new Control[]{currentMode,countdown});
             actionRow.Resize+=delegate{countdown.Location=new Point(actionRow.Width-260,4);};
             TableLayoutPanel quick = Grid(3); quick.Dock=DockStyle.Fill;
@@ -542,7 +542,7 @@ namespace VictusQuiet
             // Protection details and a session-only activity log.
             TableLayoutPanel protection=Grid(2); protection.Dock=DockStyle.Fill;
             RoundPanel rulesCard=new RoundPanel { Dock=DockStyle.Fill,Margin=new Padding(0,0,7,0),Padding=new Padding(22,18,20,18) };
-            string[] restore={"ACPI 熱區達 60°C","GPU 溫度達 55°C","運算負載升高","溫度或風扇讀值失效","本輪低速滿五分鐘","正常關閉程式"};
+            string[] restore={"ACPI 熱區達 60°C","GPU 溫度達 55°C","運算負載升高","溫度或風扇讀值失效","每 5 分鐘檢查時已不符合啟用條件","正常關閉程式"};
             Label backup=new Label { Dock=DockStyle.Bottom,Height=76,ForeColor=Accent,Text="以上條件只適用 3300 RPM 以下的低速；3300 RPM 以上的加強散熱只會在讀值失效或風扇沒升上去時恢復。\r\n另有獨立備援程序，在主程式中斷時嘗試恢復散熱。",TextAlign=ContentAlignment.MiddleLeft,Font=new Font(Ui.TextFont,9.5f) };
             backup.Dock=DockStyle.Top; rulesCard.Controls.Add(backup);
             for(int i=restore.Length-1;i>=0;i--) rulesCard.Controls.Add(RuleRow(restore[i]));
@@ -765,7 +765,8 @@ namespace VictusQuiet
             string modeName=ModeName(state,level);
             Color modeColor=state==CoolingMode.RecoveryFailed?Ui.Danger:state!=CoolingMode.Quiet?Ink:FanLevels.IsBoost(level)?Ui.Warn:Accent;
             currentMode.Text="目前："+modeName;controlMode.Text=modeName;currentMode.ForeColor=modeColor;controlMode.ForeColor=modeColor;
-            countdown.Text=state!=CoolingMode.Quiet?"低速每次最多 5 分鐘":timeLimited?"本輪剩餘 "+TimeSpan.FromSeconds(seconds).ToString(@"m\:ss"):"不限時間 · 關閉程式時恢復自動";
+            int round=session==null?1:Math.Max(1,session.Round);
+            countdown.Text=state!=CoolingMode.Quiet?"低速每 5 分鐘檢查一次":timeLimited?"第 "+round+" 輪 · "+TimeSpan.FromSeconds(seconds).ToString(@"m\:ss")+" 後檢查，符合就續轉":"不限時間 · 關閉程式時恢復自動";
             controlTimer.Text=state==CoolingMode.Quiet?countdown.Text:"選好轉速後按「套用」。";
             sessionProgress.Value=timeLimited?Math.Max(0,Math.Min(300,seconds)):0;
             connection.Text=connected?"●  已取得管理員權限":"○  尚未取得控制權限";connection.ForeColor=connected?Accent:Muted;admin.Visible=!connected;admin.Enabled=!busy;
@@ -780,7 +781,7 @@ namespace VictusQuiet
             speedNote.ForeColor=Muted;
             if(!connected)speedNote.Text="取得管理員權限後才能調整風扇。";
             else if(blocker!=null){speedNote.Text="現在不能低速："+blocker+"可改用 3300 RPM 以上。";speedNote.ForeColor=Ui.Warn;}
-            else speedNote.Text=boost?"風扇只會更快，不受溫度與時間限制；關閉程式時交回原廠自動。":"比原廠安靜；每次最多 5 分鐘，溫度或負載升高會自動恢復。";
+            else speedNote.Text=boost?"風扇只會更快，不受溫度與時間限制；關閉程式時交回原廠自動。":"比原廠安靜；每 5 分鐘檢查，條件符合就一直續轉，溫度或負載升高會立刻恢復。";
             bool active=state==CoolingMode.Quiet && level==selectedLevel;
             applySpeed.Text=active?"已套用 "+FanLevels.Rpm(selectedLevel)+" RPM":(state==CoolingMode.Quiet?"改為 ":"套用 ")+FanLevels.Rpm(selectedLevel)+" RPM";
             applySpeed.Enabled=CanApply(selectedLevel,data,state,level,connected);

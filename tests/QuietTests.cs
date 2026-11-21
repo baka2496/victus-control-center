@@ -59,10 +59,22 @@ static class QuietTests
             device = new FirmwareSimulator();
             session = new QuietSession(device, new RecoverySimulator(), () => clock);
             session.Enable();
+            device.Sample = new FanSample(54, 47, 30, 8, 18, 18);
             clock = 301;
             session.Poll();
-            if (device.QuietApplied || session.NeedsRecovery) throw new Exception("The five-minute limit must restore automatic cooling");
-            Console.WriteLine("PASS: five-minute limit restores automatic cooling");
+            if (device.QuietApplied || session.NeedsRecovery) throw new Exception("A round ending while busier than the start rule must restore automatic cooling");
+            Console.WriteLine("PASS: five-minute round ends low speed when start conditions no longer hold");
+            clock = 0; device = new FirmwareSimulator(); RecoverySimulator renewGuard = new RecoverySimulator();
+            session = new QuietSession(device, renewGuard, () => clock);
+            session.Enable(); renewGuard.Limit = -1;
+            clock = 301; session.Poll();
+            if (!session.NeedsRecovery || session.Mode != CoolingMode.Quiet || session.Round != 2 || renewGuard.Limit != 307 || session.RemainingSeconds != 300)
+                throw new Exception("A cool, idle machine must renew low speed and re-arm the guard");
+            clock = 602; session.Poll();
+            if (session.Round != 3 || !session.NeedsRecovery) throw new Exception("Low speed must keep renewing while conditions hold");
+            device.Sample = new FanSample(61, 47, 10, 8, 18, 18); clock = 610; session.Poll();
+            if (session.NeedsRecovery) throw new Exception("Heat must still end a renewed round immediately");
+            Console.WriteLine("PASS: cool and idle renews low speed every five minutes; heat still ends it at once");
             device = new FirmwareSimulator();
             session = new QuietSession(device, new RecoverySimulator(), () => 0);
             session.Enable();
