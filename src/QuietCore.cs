@@ -65,6 +65,8 @@ namespace VictusQuiet
         public FanSample Latest { get; private set; }
         public string Status { get; private set; }
         public int TargetLevel { get; private set; }
+        // 1 for the first five-minute low-speed round, +1 each time it renews automatically.
+        public int Round { get; private set; }
         public bool TimeLimited { get { return Mode == CoolingMode.Quiet && !FanLevels.IsBoost(TargetLevel); } }
         public int RemainingSeconds { get { return TimeLimited ? Math.Max(0, FanLevels.LowSpeedSeconds - (int)(seconds() - began)) : 0; } }
         public QuietSession(IQuietDevice device, IRecoveryGuard recovery, Func<double> monotonicSeconds)
@@ -97,11 +99,11 @@ namespace VictusQuiet
                 // Re-arming restarts the guard's clock, so switching levels starts a fresh low-speed round.
                 recovery.Arm(boost ? 0 : FanLevels.LowSpeedSeconds + 7);
                 device.ApplyLevel(level);
-                TargetLevel = level; Mode = CoolingMode.Quiet;
+                TargetLevel = level; Mode = CoolingMode.Quiet; Round = 1;
                 began = lastWrite = seconds(); busySince = -1;
                 Status = boost
                     ? "加強散熱已送出，風扇將升到約 " + FanLevels.Rpm(level) + " RPM；不限時間。"
-                    : "低速已送出，風扇將逐步降至約 " + FanLevels.Rpm(level) + " RPM；最多 5 分鐘。";
+                    : "低速已送出，風扇將逐步降至約 " + FanLevels.Rpm(level) + " RPM；每 5 分鐘檢查一次，條件符合就繼續。";
             }
             catch (Exception error)
             {
@@ -158,7 +160,20 @@ namespace VictusQuiet
                 if (Latest.ZoneC >= 60 || Latest.GpuC >= 55)
                 { Restore("溫度升高，已恢復自動散熱。"); return; }
                 if (seconds() - began >= FanLevels.LowSpeedSeconds)
-                { Restore("本輪五分鐘已結束，已恢復自動散熱。"); return; }
+                {
+                    // End of a five-minute round: keep going only if the start conditions still hold.
+                    string blocker = FanLevels.LowSpeedBlocker(Latest);
+                    if (blocker != null) { Restore("本輪五分鐘結束，" + blocker + "已恢復自動散熱。"); return; }
+                    try
+                    {
+                        recovery.Arm(FanLevels.LowSpeedSeconds + 7);
+                        device.ApplyLevel(TargetLevel);
+                        began = lastWrite = seconds(); busySince = -1; Round++;
+                        Status = "溫度與負載仍正常，已自動續轉第 " + Round + " 輪（約 " + FanLevels.Rpm(TargetLevel) + " RPM）。";
+                    }
+                    catch (Exception) { Restore("續轉失敗，已恢復自動散熱。"); }
+                    return;
+                }
                 if (Latest.CpuLoad >= 70 || Latest.GpuLoad >= 50)
                 { Restore("運算負載升高，已恢復自動散熱。"); return; }
                 if (Latest.CpuLoad >= 35)
