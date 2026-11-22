@@ -160,13 +160,23 @@ namespace VictusQuiet
                     return 0;
                 }
                 bool owns = false;
+                if (IsAdmin())
+                {
+                    int self = Process.GetCurrentProcess().Id;
+                    foreach (Process other in Process.GetProcessesByName("VictusControlPanel"))
+                    using (other)
+                    {
+                        if (other.Id == self) continue;
+                        try { other.Kill(); other.WaitForExit(3000); } catch (Exception) { }
+                    }
+                }
                 using (Mutex control = new Mutex(false, @"Local\VictusQuiet-88F8-Control"))
                 {
                     try
                     {
                         if (IsAdmin())
                         {
-                            try { owns = control.WaitOne(0); } catch (AbandonedMutexException) { owns = true; }
+                            try { owns = control.WaitOne(2000); } catch (AbandonedMutexException) { owns = true; }
                             if (!owns) { MessageBox.Show("已有 Victus 控制中心正在執行，請使用原來的視窗。", "Victus 控制中心"); return 2; }
                         }
                         Application.Run(window);
