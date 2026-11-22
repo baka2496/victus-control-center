@@ -214,6 +214,20 @@ static class QuietTests
             if (FanLevels.LowSpeedBlocker(new FanSample(54, 47, 10, 8, 18, 18)) != null || FanLevels.LowSpeedBlocker(new FanSample(83, 47, 10, 8, 18, 18)) == null)
                 throw new Exception("The panel's low-speed check must match the session's rule");
             Console.WriteLine("PASS: the panel uses the same low-speed rule as the controller");
+
+            // Curve presets: Silent, Balanced, Cool.
+            if (FanLevels.CurveFloor(66, 47, CurvePreset.Silent) != 0 || FanLevels.CurveFloor(69, 47, CurvePreset.Silent) != 22)
+                throw new Exception("Silent curve preset must wait until 68°C before raising speed");
+            if (FanLevels.CurveFloor(61, 47, CurvePreset.Cool) != 22 || FanLevels.CurveFloor(66, 47, CurvePreset.Cool) != 26)
+                throw new Exception("Cool curve preset must step up earlier at 60°C and 65°C");
+            clock = 0; device = new FirmwareSimulator();
+            session = new QuietSession(device, new RecoverySimulator(), () => clock) { Preset = CurvePreset.Cool };
+            session.Enable(18);
+            if (device.AppliedLevel != 18) throw new Exception("54°C must stay at 1800 RPM even in Cool preset");
+            clock = 10; device.Sample = new FanSample(61, 47, 10, 8, 18, 18); session.Poll();
+            if (device.AppliedLevel != 22) throw new Exception("Cool preset must raise to 2200 RPM at 61°C");
+            Console.WriteLine("PASS: Silent, Balanced, and Cool curve presets step speeds at their configured temperatures");
+
             return 0;
         }
         catch (Exception error) { Console.Error.WriteLine(error); return 1; }

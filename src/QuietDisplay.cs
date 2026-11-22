@@ -22,6 +22,7 @@ namespace VictusQuiet
             return Minimum + (int)Math.Round(percent * (Maximum - Minimum) / 100.0);
         }
         public abstract void SetPercent(int percent);
+        public virtual bool Refresh() { return true; }
         public virtual void Dispose() { }
     }
 
@@ -47,6 +48,7 @@ namespace VictusQuiet
             }
             return false;
         }
+        public override bool Refresh() { return Read(); }
         public override void SetPercent(int percent)
         {
             int raw = RawFromPercent(percent);
@@ -71,6 +73,19 @@ namespace VictusQuiet
         {
             this.instance = instance; Name = name; Kind = "筆電面板 · Windows 亮度"; Internal = true;
             Minimum = 0; Maximum = 100; Current = current;
+        }
+        public override bool Refresh()
+        {
+            try
+            {
+                using (ManagementObjectSearcher searcher = new ManagementObjectSearcher(@"root\wmi", "SELECT InstanceName, CurrentBrightness FROM WmiMonitorBrightness"))
+                    foreach (ManagementObject item in searcher.Get())
+                        using (item)
+                            if (String.Equals((string)item["InstanceName"], instance, StringComparison.OrdinalIgnoreCase))
+                            { Current = Convert.ToInt32(item["CurrentBrightness"]); return true; }
+            }
+            catch (ManagementException) { }
+            return false;
         }
         public override void SetPercent(int percent)
         {

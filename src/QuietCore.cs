@@ -31,6 +31,7 @@ namespace VictusQuiet
         void Complete();
     }
     public enum CoolingMode { Automatic, Quiet, RecoveryFailed }
+    public enum CurvePreset { Balanced = 0, Silent = 1, Cool = 2 }
 
     public static class FanLevels
     {
@@ -48,16 +49,34 @@ namespace VictusQuiet
         // Starting (and renewing a five-minute round) needs a little margin below the hard limits.
         // Only temperature matters: load is shown in the panel but never blocks or ends a low speed.
         public const int StartZone = 82, StartGpu = 75;
+        // Auto-resume threshold after a temporary thermal hand-back.
+        public const int ResumeZone = 72, ResumeGpu = 67;
         // The quiet curve never goes above this; faster than that is boost territory.
         public const int LowCeiling = 32;
-        // Lowest level the temperature allows right now (0 = no floor). GPU counts 5°C hotter than ACPI.
-        public static int CurveFloor(double zone, double gpu)
+        public static double EffectiveTemp(double zone, double gpu) { return Math.Max(zone, gpu + 5); }
+        public static int[] CurveThresholds(CurvePreset preset)
         {
-            double t = Math.Max(zone, gpu + 5);
-            if (t >= 78) return 32;
-            if (t >= 74) return 29;
-            if (t >= 70) return 26;
-            if (t >= 65) return 22;
+            if (preset == CurvePreset.Silent) return new int[] { 68, 73, 77, 80 };
+            if (preset == CurvePreset.Cool) return new int[] { 60, 65, 70, 75 };
+            return new int[] { 65, 70, 74, 78 };
+        }
+        public static int[] CurveSteps { get { return new int[] { 22, 26, 29, 32 }; } }
+        public static string PresetName(CurvePreset preset)
+        {
+            if (preset == CurvePreset.Silent) return "極致安靜";
+            if (preset == CurvePreset.Cool) return "涼爽安靜";
+            return "平衡安靜";
+        }
+        // Lowest level the temperature allows right now (0 = no floor). GPU counts 5°C hotter than ACPI.
+        public static int CurveFloor(double zone, double gpu) { return CurveFloor(zone, gpu, CurvePreset.Balanced); }
+        public static int CurveFloor(double zone, double gpu, CurvePreset preset)
+        {
+            double t = EffectiveTemp(zone, gpu);
+            int[] steps = CurveThresholds(preset);
+            if (t >= steps[3]) return 32;
+            if (t >= steps[2]) return 29;
+            if (t >= steps[1]) return 26;
+            if (t >= steps[0]) return 22;
             return 0;
         }
         // Why a low-speed level cannot start now, or null when it can.
@@ -86,6 +105,7 @@ namespace VictusQuiet
         public string Status { get; private set; }
         public int TargetLevel { get; private set; }
         public bool AutoQuiet { get; set; }
+        public CurvePreset Preset { get; set; }
         // 1 for the first five-minute low-speed round, +1 each time it renews automatically.
         public int Round { get; private set; }
         public bool TimeLimited { get { return Mode == CoolingMode.Quiet && !FanLevels.IsBoost(TargetLevel); } }
@@ -119,7 +139,7 @@ namespace VictusQuiet
                 if (!changing) { recovery.Begin(); NeedsRecovery = true; }
                 // Re-arming restarts the guard's clock, so switching levels starts a fresh low-speed round.
                 recovery.Arm(boost ? 0 : FanLevels.LowSpeedSeconds + 7);
-                int floor = boost ? 0 : FanLevels.CurveFloor(Latest.ZoneC, Latest.GpuC);
+                int floor = boost ? 0 : FanLevels.CurveFloor(Latest.ZoneC, Latest.GpuC, Preset);
                 int write = boost ? level : Math.Min(FanLevels.LowCeiling, Math.Max(level, floor));
                 device.ApplyLevel(write);
                 TargetLevel = level; Level = write; thermalFloor = floor; Mode = CoolingMode.Quiet; Round = 1;
@@ -214,9 +234,9 @@ namespace VictusQuiet
                     return;
                 }
                 // Quiet curve with 3°C hysteresis: rise at once, come down only when clearly cooler.
-                int rising = FanLevels.CurveFloor(Latest.ZoneC, Latest.GpuC);
+                int rising = FanLevels.CurveFloor(Latest.ZoneC, Latest.GpuC, Preset);
                 if (rising >= thermalFloor) thermalFloor = rising;
-                else thermalFloor = Math.Min(thermalFloor, FanLevels.CurveFloor(Latest.ZoneC + 3, Latest.GpuC + 3));
+                else thermalFloor = Math.Min(thermalFloor, FanLevels.CurveFloor(Latest.ZoneC + 3, Latest.GpuC + 3, Preset));
                 int want = Math.Min(FanLevels.LowCeiling, Math.Max(TargetLevel, thermalFloor));
                 if (want != Level)
                 {

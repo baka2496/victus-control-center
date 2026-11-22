@@ -148,9 +148,10 @@ namespace VictusQuiet
                 }
             }
             Application.EnableVisualStyles(); Application.SetCompatibleTextRenderingDefault(false);
+            bool startInTray = args.Length == 1 && args[0] == "--tray";
             bool render = args.Length == 2 && (args[0] == "--render" || args[0] == "--render-auto" || args[0] == "--render-locked" || args[0] == "--render-controls" || args[0] == "--render-protection" || args[0] == "--render-display" || args[0] == "--render-boost" || args[0] == "--render-hot" || args[0] == "--render-curve");
             string scene = render && args[0] != "--render" ? args[0].Substring(9) : "quiet";
-            using (QuietWindow window = new QuietWindow(render, scene))
+            using (QuietWindow window = new QuietWindow(render, scene, startInTray))
             {
                 if (render)
                 {
