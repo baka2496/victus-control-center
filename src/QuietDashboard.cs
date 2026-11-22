@@ -534,18 +534,18 @@ namespace VictusQuiet
             Panel conditionHost=new Panel { Dock=DockStyle.Fill,Padding=new Padding(0,14,0,0) };
             RoundPanel conditions=new RoundPanel { Dock=DockStyle.Fill,Padding=new Padding(20,12,20,12) };
             TableLayoutPanel chips=Grid(4); chips.Dock=DockStyle.Top; chips.Height=58;
-            string[,] rules={{"ACPI 熱區","低於 72°C"},{"GPU 溫度","低於 67°C"},{"CPU 負載","不超過 35%"},{"GPU 負載","不超過 30%"}};
+            string[,] rules={{"ACPI 熱區","低於 72°C"},{"GPU 溫度","低於 67°C"},{"升溫時","小幅加速 2200～3200"},{"負載","不限制，只看溫度"}};
             for(int i=0;i<4;i++) chips.Controls.Add(Chip(rules[i,0],rules[i,1],i),i,0);
             conditions.Controls.Add(chips);
-            conditions.Controls.Add(new Label { Text="低速（3300 RPM 以下）的啟用條件　·　3300 RPM 以上不受限制",Dock=DockStyle.Top,Height=28,ForeColor=Ink,Font=new Font(Ui.TextFont,10.5f,FontStyle.Bold) });
+            conditions.Controls.Add(new Label { Text="低速（3300 RPM 以下）只看溫度　·　3300 RPM 以上不受限制",Dock=DockStyle.Top,Height=28,ForeColor=Ink,Font=new Font(Ui.TextFont,10.5f,FontStyle.Bold) });
             conditionHost.Controls.Add(conditions);
             pages[1].Controls.Add(conditionHost); pages[1].Controls.Add(modeTiles); pages[1].Controls.Add(modeHead);
 
             // Protection details and a session-only activity log.
             TableLayoutPanel protection=Grid(2); protection.Dock=DockStyle.Fill;
             RoundPanel rulesCard=new RoundPanel { Dock=DockStyle.Fill,Margin=new Padding(0,0,7,0),Padding=new Padding(22,18,20,18) };
-            string[] restore={"ACPI 熱區達 75°C","GPU 溫度達 70°C","CPU 負載達 70% 或 GPU 負載達 50%","溫度或風扇讀值失效","每 5 分鐘檢查時已不符合啟用條件","正常關閉程式"};
-            Label backup=new Label { Dock=DockStyle.Bottom,Height=76,ForeColor=Accent,Text="還沒到上限時不會切回原廠：升溫或 CPU 持續忙碌時先小幅加速（2200～3200 RPM），降溫後自動降回。\r\n以上只適用 3300 RPM 以下；加強散熱只在讀值失效或風扇沒升上去時恢復。另有獨立備援程序。",TextAlign=ContentAlignment.MiddleLeft,Font=new Font(Ui.TextFont,9.5f) };
+            string[] restore={"ACPI 熱區達 75°C","GPU 溫度達 70°C","溫度或風扇讀值失效","每 5 分鐘檢查時已不符合啟用條件","正常關閉程式"};
+            Label backup=new Label { Dock=DockStyle.Bottom,Height=76,ForeColor=Accent,Text="還沒到上限時不會切回原廠：升溫時先小幅加速（2200～3200 RPM），降溫後自動降回。\r\n以上只適用 3300 RPM 以下；加強散熱只在讀值失效或風扇沒升上去時恢復。另有獨立備援程序。",TextAlign=ContentAlignment.MiddleLeft,Font=new Font(Ui.TextFont,9.5f) };
             backup.Dock=DockStyle.Top; rulesCard.Controls.Add(backup);
             for(int i=restore.Length-1;i>=0;i--) rulesCard.Controls.Add(RuleRow(restore[i]));
             rulesCard.Controls.Add(CardTitle("","自動恢復條件"));
