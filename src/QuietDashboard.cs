@@ -180,6 +180,103 @@ namespace VictusQuiet
         { return Color.FromArgb((int)(a.R + (b.R - a.R) * t), (int)(a.G + (b.G - a.G) * t), (int)(a.B + (b.B - a.B) * t)); }
     }
 
+    // What the tray menu renderer needs to draw one row.
+    sealed class TrayRow
+    {
+        public string Glyph = "", Hint = "", Subtitle = "";
+        public Color Tone = Color.Empty;
+        public bool Header;
+    }
+
+    // Dark, rounded tray menu matching the dashboard: icon column, accent hover, check for the active mode.
+    sealed class TrayMenuRenderer : ToolStripRenderer
+    {
+        public static readonly Font Text = new Font(Ui.TextFont, 10f), Small = new Font(Ui.TextFont, 8.5f), Bold = new Font(Ui.TextFont, 10.5f, FontStyle.Bold);
+        public static Icon AppIcon;
+        static Font glyphs, arrows;
+        static Font Glyphs { get { if (glyphs == null) glyphs = Ui.Icons(11f) ?? Text; return glyphs; } }
+        protected override void OnRenderToolStripBackground(ToolStripRenderEventArgs e)
+        { using (Brush b = new SolidBrush(Ui.Surface)) e.Graphics.FillRectangle(b, new Rectangle(Point.Empty, e.ToolStrip.Size)); }
+        protected override void OnRenderToolStripBorder(ToolStripRenderEventArgs e) { }
+        protected override void OnRenderImageMargin(ToolStripRenderEventArgs e) { }
+        protected override void OnRenderItemCheck(ToolStripItemImageRenderEventArgs e) { }
+        protected override void OnRenderItemImage(ToolStripItemImageRenderEventArgs e) { }
+        protected override void OnRenderSeparator(ToolStripSeparatorRenderEventArgs e)
+        {
+            int y = e.Item.Height / 2;
+            using (Pen p = new Pen(Ui.Border)) e.Graphics.DrawLine(p, 14, y, e.Item.Width - 14, y);
+        }
+        protected override void OnRenderArrow(ToolStripArrowRenderEventArgs e)
+        {
+            Rectangle r = new Rectangle(e.Item.Width - 34, 0, 22, e.Item.Height);
+            if (arrows == null) arrows = Ui.Icons(8f) ?? Text;
+            TextRenderer.DrawText(e.Graphics, "", arrows, r, e.Item.Selected ? Ui.Ink : Ui.Faint, TextFormatFlags.VerticalCenter | TextFormatFlags.HorizontalCenter | TextFormatFlags.NoPadding);
+        }
+        protected override void OnRenderMenuItemBackground(ToolStripItemRenderEventArgs e)
+        {
+            Graphics g = e.Graphics; ToolStripItem item = e.Item; TrayRow row = item.Tag as TrayRow;
+            g.SmoothingMode = SmoothingMode.AntiAlias;
+            if (row != null && row.Header)
+            {
+                using (GraphicsPath band = Ui.Round(new RectangleF(6, 2, item.Width - 12, item.Height - 4), 8))
+                using (Brush b = new SolidBrush(Ui.Canvas)) g.FillPath(b, band);
+                return;
+            }
+            ToolStripMenuItem menuItem = item as ToolStripMenuItem;
+            bool on = menuItem != null && menuItem.Checked;
+            if ((!item.Selected || !item.Enabled) && !on) return;
+            RectangleF box = new RectangleF(6, 1, item.Width - 12, item.Height - 2);
+            Color fill = item.Selected && item.Enabled ? Ui.SurfaceHi : Ui.Mix(Ui.Surface, Ui.AccentDeep, .55f);
+            using (GraphicsPath path = Ui.Round(box, 7)) using (Brush b = new SolidBrush(fill)) g.FillPath(b, path);
+            if (on) using (GraphicsPath bar = Ui.Round(new RectangleF(9, item.Height * .28f, 3, item.Height * .44f), 1.5f)) using (Brush b = new SolidBrush(Ui.Accent)) g.FillPath(b, bar);
+        }
+        protected override void OnRenderItemText(ToolStripItemTextRenderEventArgs e)
+        {
+            Graphics g = e.Graphics; ToolStripItem item = e.Item; TrayRow row = item.Tag as TrayRow ?? new TrayRow();
+            TextFormatFlags left = TextFormatFlags.VerticalCenter | TextFormatFlags.Left | TextFormatFlags.NoPadding | TextFormatFlags.EndEllipsis;
+            if (row.Header)
+            {
+                if (AppIcon != null) using (Icon icon = new Icon(AppIcon, 32, 32)) using (Bitmap picture = icon.ToBitmap())
+                { g.InterpolationMode = InterpolationMode.HighQualityBicubic; g.DrawImage(picture, new Rectangle(16, (item.Height - 28) / 2, 28, 28)); }
+                TextRenderer.DrawText(g, item.Text, Bold, new Rectangle(54, 8, item.Width - 64, 22), Ui.Ink, left);
+                TextRenderer.DrawText(g, row.Subtitle, Small, new Rectangle(54, 30, item.Width - 64, 20), row.Tone.IsEmpty ? Ui.Muted : row.Tone, left);
+                return;
+            }
+            ToolStripMenuItem menuItem = item as ToolStripMenuItem;
+            bool on = menuItem != null && menuItem.Checked;
+            Color tone = !item.Enabled ? Ui.Faint : on ? Ui.Accent : row.Tone.IsEmpty ? Ui.Ink : row.Tone;
+            Color glyphTone = !item.Enabled ? Ui.Faint : on ? Ui.Accent : row.Tone.IsEmpty ? Ui.Muted : row.Tone;
+            if (row.Glyph.Length > 0) TextRenderer.DrawText(g, row.Glyph, Glyphs, new Rectangle(18, 0, 22, item.Height), glyphTone, TextFormatFlags.VerticalCenter | TextFormatFlags.HorizontalCenter | TextFormatFlags.NoPadding);
+            TextRenderer.DrawText(g, item.Text, Text, new Rectangle(48, 0, item.Width - 120, item.Height), tone, left);
+            if (on) TextRenderer.DrawText(g, "", Glyphs, new Rectangle(item.Width - 38, 0, 22, item.Height), Ui.Accent, TextFormatFlags.VerticalCenter | TextFormatFlags.HorizontalCenter | TextFormatFlags.NoPadding);
+            else if (row.Hint.Length > 0) TextRenderer.DrawText(g, row.Hint, Small, new Rectangle(item.Width - 120, 0, 104, item.Height), Ui.Faint, TextFormatFlags.VerticalCenter | TextFormatFlags.Right | TextFormatFlags.NoPadding);
+        }
+        [DllImport("dwmapi.dll")] static extern int DwmSetWindowAttribute(IntPtr window, int attribute, ref int value, int size);
+        // Windows 11 rounded corners and a border in the dashboard's border colour.
+        public static void Style(ToolStripDropDown menu, int width = 300)
+        {
+            menu.Renderer = new TrayMenuRenderer(); menu.BackColor = Ui.Surface; menu.ForeColor = Ui.Ink; menu.Font = Text;
+            menu.Padding = new Padding(0, 6, 0, 6); menu.DropShadowEnabled = true; menu.MinimumSize = new Size(width, 0);
+            ToolStripDropDownMenu dropDown = menu as ToolStripDropDownMenu;
+            if (dropDown != null) { dropDown.ShowImageMargin = false; dropDown.ShowCheckMargin = false; }
+            menu.HandleCreated += delegate
+            {
+                try
+                {
+                    int round = 2; DwmSetWindowAttribute(menu.Handle, 33, ref round, 4);
+                    int border = Ui.Border.R | (Ui.Border.G << 8) | (Ui.Border.B << 16); DwmSetWindowAttribute(menu.Handle, 34, ref border, 4);
+                }
+                catch (Exception) { }
+            };
+        }
+        public static ToolStripMenuItem Row(string text, string glyph, EventHandler click, string hint = "", Color tone = default(Color))
+        {
+            ToolStripMenuItem item = new ToolStripMenuItem(text, null, click) { AutoSize = false, Size = new Size(300, 38), Tag = new TrayRow { Glyph = glyph, Hint = hint, Tone = tone } };
+            return item;
+        }
+        public static ToolStripSeparator Line() { return new ToolStripSeparator { AutoSize = false, Size = new Size(300, 11) }; }
+    }
+
     // Panel painted as a rounded card; BackColor is the card fill so child labels blend in.
     class RoundPanel : Panel
     {
@@ -769,7 +866,33 @@ namespace VictusQuiet
         readonly TextBox eventLog;
         readonly System.Windows.Forms.Timer timer;
         readonly NotifyIcon tray;
+        public ContextMenuStrip TrayMenu { get; private set; }
+        ToolStripMenuItem trayHeader, trayQuiet, trayBalanced, trayBoost, trayAuto;
         Icon dynamicTrayIcon;
+
+        // Header line and check marks follow the live state each time the menu opens.
+        public void RefreshTrayMenu()
+        {
+            bool connected = preview || Program.IsAdmin();
+            CoolingMode mode = session == null ? (preview ? CoolingMode.Quiet : CoolingMode.Automatic) : session.Mode;
+            int target = session == null ? (preview ? FanLevels.Quiet : 0) : session.TargetLevel;
+            int running = session == null ? target : session.Level;
+            FanSample data = session == null ? (preview ? new FanSample(58, 47, 12, 8, 18, 18) : null) : session.Latest;
+            bool manual = mode == CoolingMode.Quiet;
+            string state = mode == CoolingMode.RecoveryFailed ? "恢復待確認"
+                : !manual ? "原廠自動散熱"
+                : (FanLevels.IsBoost(target) ? "加強散熱 " : target == FanLevels.Quiet ? "安靜模式 " : "低速 ") + FanLevels.Rpm(running) + " RPM";
+            string temps = data == null || !data.Valid ? "" : " · 熱區 " + data.ZoneC.ToString("0") + "° · GPU " + data.GpuC.ToString("0") + "°";
+            TrayRow head = (TrayRow)trayHeader.Tag;
+            head.Subtitle = !connected ? "尚未取得管理員權限" : state + temps;
+            head.Tone = mode == CoolingMode.RecoveryFailed ? Ui.Danger : manual ? (FanLevels.IsBoost(target) ? Ui.Warn : Ui.Accent) : Ui.Muted;
+            trayQuiet.Checked = manual && target == FanLevels.Quiet;
+            trayBalanced.Checked = manual && target == 25;
+            trayBoost.Checked = manual && target == FanLevels.Maximum;
+            trayAuto.Checked = mode == CoolingMode.Automatic && connected;
+            foreach (ToolStripMenuItem item in new[] { trayQuiet, trayBalanced, trayBoost }) item.Enabled = connected && !busy && mode != CoolingMode.RecoveryFailed;
+            trayAuto.Enabled = connected && !busy && (session == null || session.NeedsRecovery || mode == CoolingMode.Automatic);
+        }
         HpQuietDevice device;
         ProcessRecoveryGuard guard;
         QuietSession session;
@@ -848,22 +971,30 @@ namespace VictusQuiet
 
             // System Tray Icon & Quick Context Menu
             ContextMenuStrip trayMenu = new ContextMenuStrip();
-            trayMenu.Items.Add("開啟 Victus 控制中心", null, delegate { RestoreFromTray(); });
-            trayMenu.Items.Add(new ToolStripSeparator());
-            trayMenu.Items.Add("安靜模式 · 1800 RPM", null, async delegate { if (session != null) await Run(delegate { session.Enable(FanLevels.Quiet); }); });
-            trayMenu.Items.Add("平衡低速 · 2500 RPM", null, async delegate { if (session != null) await Run(delegate { session.Enable(25); }); });
-            trayMenu.Items.Add("最大散熱 · 5000 RPM", null, async delegate { if (session != null) await Run(delegate { session.Enable(FanLevels.Maximum); }); });
-            trayMenu.Items.Add("恢復原廠自動散熱", null, async delegate { if (session != null) await Run(delegate { session.Restore("已從系統匣恢復原廠自動散熱。"); }); });
-            trayMenu.Items.Add(new ToolStripSeparator());
-            ToolStripMenuItem brightMenu = new ToolStripMenuItem("全螢幕快速亮度");
+            TrayMenuRenderer.AppIcon = Icon; TrayMenuRenderer.Style(trayMenu);
+            trayHeader = new ToolStripMenuItem("Victus 控制中心") { AutoSize = false, Size = new Size(300, 58), Tag = new TrayRow { Header = true } };
+            trayHeader.Click += delegate { RestoreFromTray(); };
+            trayMenu.Items.Add(trayHeader);
+            trayMenu.Items.Add(TrayMenuRenderer.Row("開啟控制中心", "", delegate { RestoreFromTray(); }));
+            trayMenu.Items.Add(TrayMenuRenderer.Line());
+            trayQuiet = TrayMenuRenderer.Row("安靜模式", "", async delegate { if (session != null) await Run(delegate { session.Enable(FanLevels.Quiet); }); }, "1800 RPM");
+            trayBalanced = TrayMenuRenderer.Row("平衡低速", "", async delegate { if (session != null) await Run(delegate { session.Enable(25); }); }, "2500 RPM");
+            trayBoost = TrayMenuRenderer.Row("最大散熱", "", async delegate { if (session != null) await Run(delegate { session.Enable(FanLevels.Maximum); }); }, "5000 RPM");
+            trayAuto = TrayMenuRenderer.Row("原廠自動散熱", "", async delegate { if (session != null) await Run(delegate { session.Restore("已從系統匣恢復原廠自動散熱。"); }); }, "BIOS");
+            trayMenu.Items.AddRange(new ToolStripItem[] { trayQuiet, trayBalanced, trayBoost, trayAuto, TrayMenuRenderer.Line() });
+            ToolStripMenuItem brightMenu = TrayMenuRenderer.Row("全部螢幕亮度", "", null);
+            TrayMenuRenderer.Style(brightMenu.DropDown, 170);
             foreach (int pct in new int[] { 25, 50, 75, 100 })
             {
                 int targetPct = pct;
-                brightMenu.DropDownItems.Add(targetPct + "%", null, async delegate { await ApplySceneBrightness(targetPct, targetPct); });
+                ToolStripMenuItem level = TrayMenuRenderer.Row(targetPct + "%", pct <= 50 ? "" : "", async delegate { await ApplySceneBrightness(targetPct, targetPct); });
+                level.Size = new Size(170, 36); brightMenu.DropDownItems.Add(level);
             }
             trayMenu.Items.Add(brightMenu);
-            trayMenu.Items.Add(new ToolStripSeparator());
-            trayMenu.Items.Add("結束並恢復原廠散熱", null, delegate { forceExit = true; Close(); });
+            trayMenu.Items.Add(TrayMenuRenderer.Line());
+            trayMenu.Items.Add(TrayMenuRenderer.Row("結束並交回原廠散熱", "", delegate { forceExit = true; Close(); }, "", Ui.Danger));
+            trayMenu.Opening += delegate { RefreshTrayMenu(); };
+            TrayMenu = trayMenu;
 
             tray = new NotifyIcon { Icon = Icon, Text = "Victus 控制中心", Visible = !preview, ContextMenuStrip = trayMenu };
             tray.DoubleClick += delegate { RestoreFromTray(); };
