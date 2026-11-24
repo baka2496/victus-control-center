@@ -149,7 +149,7 @@ namespace VictusQuiet
             }
             Application.EnableVisualStyles(); Application.SetCompatibleTextRenderingDefault(false);
             bool startInTray = args.Length == 1 && args[0] == "--tray";
-            bool render = args.Length == 2 && (args[0] == "--render" || args[0] == "--render-auto" || args[0] == "--render-locked" || args[0] == "--render-controls" || args[0] == "--render-protection" || args[0] == "--render-display" || args[0] == "--render-boost" || args[0] == "--render-hot" || args[0] == "--render-curve");
+            bool render = args.Length == 2 && (args[0] == "--render" || args[0] == "--render-auto" || args[0] == "--render-locked" || args[0] == "--render-controls" || args[0] == "--render-protection" || args[0] == "--render-display" || args[0] == "--render-boost" || args[0] == "--render-hot" || args[0] == "--render-curve" || args[0] == "--render-tray" || args[0] == "--render-traylive");
             string scene = render && args[0] != "--render" ? args[0].Substring(9) : "quiet";
             using (QuietWindow window = new QuietWindow(render, scene, startInTray))
             {
@@ -157,6 +157,36 @@ namespace VictusQuiet
                 {
                     window.StartPosition = FormStartPosition.Manual; window.Location = new Point(-16000,-16000);
                     window.Show(); Application.DoEvents();
+                    if (scene == "traylive")
+                    {
+                        // Pops the real menu (and the brightness submenu) on screen for a moment and captures it.
+                        ContextMenuStrip live = window.TrayMenu; window.RefreshTrayMenu();
+                        Rectangle screen = Screen.PrimaryScreen.WorkingArea; Point at = new Point(screen.Right - 560, screen.Bottom - 440);
+                        live.Show(at); Application.DoEvents(); Thread.Sleep(300); Application.DoEvents();
+                        foreach (ToolStripItem item in live.Items) { ToolStripMenuItem sub = item as ToolStripMenuItem; if (sub != null && sub.HasDropDownItems) { sub.Select(); sub.ShowDropDown(); } }
+                        for (int i = 0; i < 6; i++) { Application.DoEvents(); Thread.Sleep(100); }
+                        Rectangle area = new Rectangle(at.X - 20, at.Y - 20, 560, 440);
+                        using (Bitmap shot = new Bitmap(area.Width, area.Height)) { using (Graphics g = Graphics.FromImage(shot)) g.CopyFromScreen(area.Location, Point.Empty, area.Size); shot.Save(args[1]); }
+                        live.Close(); return 0;
+                    }
+                    if (scene == "tray")
+                    {
+                        // Draw the tray menu on a dark backdrop, with a hovered row, without showing it on screen.
+                        ContextMenuStrip menu = window.TrayMenu; window.RefreshTrayMenu();
+                        menu.CreateControl(); menu.PerformLayout(); Size size = menu.GetPreferredSize(Size.Empty); menu.Size = size;
+                        foreach (ToolStripItem item in menu.Items) if (item.Text == "最大散熱") item.Select();
+                        using (Bitmap picture = new Bitmap(size.Width + 48, size.Height + 48))
+                        using (Graphics g = Graphics.FromImage(picture))
+                        using (Bitmap face = new Bitmap(size.Width, size.Height))
+                        {
+                            g.Clear(Color.FromArgb(32, 32, 32));
+                            menu.DrawToBitmap(face, new Rectangle(Point.Empty, size));
+                            g.DrawImage(face, 24, 24);
+                            using (Pen edge = new Pen(Color.FromArgb(37, 49, 66))) g.DrawRectangle(edge, 24, 24, size.Width - 1, size.Height - 1);
+                            picture.Save(args[1]);
+                        }
+                        return 0;
+                    }
                     using (Bitmap bitmap = new Bitmap(window.Width, window.Height)) { window.DrawToBitmap(bitmap, new Rectangle(Point.Empty, bitmap.Size)); bitmap.Save(args[1]); }
                     return 0;
                 }
